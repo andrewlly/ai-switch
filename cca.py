@@ -1297,8 +1297,8 @@ def usage_spec(acct: Account) -> dict:
     """What `usage.py` needs to probe one account, as plain data.
 
     Deliberately not an Account: the usage module is importable on its own so
-    the perf-ai console can load it by path, and a module that takes registry
-    objects could not be.
+    a service can load it by path, and a module that takes registry objects
+    could not be.
     """
     ident = acct.identity()
     return {

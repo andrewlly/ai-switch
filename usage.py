@@ -28,7 +28,7 @@ from the newest rollout on disk and reported with `source: "rollout"`. That is
 a cache by another name and it is labelled as one.
 
 Stdlib only, and importable on its own: `probe`/`collect` take plain dicts, not
-registry objects, so the perf-ai console can load this module by path.
+registry objects, so a service can load this module by path.
 """
 
 from __future__ import annotations

@@ -555,13 +555,13 @@ class TestAliases(Base):
     def test_a_new_account_gets_a_shortcut(self):
         """Regression: `add` stored "" (= deliberately none), so newly created
         accounts silently never got a shortcut at all."""
-        self.run_cmd(cca.cmd_add, name="zhao", dir=None, description=None,
+        self.run_cmd(cca.cmd_add, name="demo", dir=None, description=None,
                      login=False, alias=None, tool=None,
                      entry="cca", entry_tool="claude")
-        acct = cca.Registry.load().get("zhao")
-        self.assertEqual(acct.alias, "ccz")           # first letter of the name
-        self.assertEqual(acct.launch_cmd, "ccz")
-        self.assertTrue((cca.BIN_DIR / "ccz").is_symlink())
+        acct = cca.Registry.load().get("demo")
+        self.assertEqual(acct.alias, "ccd")           # first letter of the name
+        self.assertEqual(acct.launch_cmd, "ccd")
+        self.assertTrue((cca.BIN_DIR / "ccd").is_symlink())
 
     def test_doctor_reports_an_account_with_no_shortcut(self):
         """Nothing else ever revisits a cleared/failed alias, so doctor must say so."""

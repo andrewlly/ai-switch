@@ -1,2 +1,30 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Test and coverage output
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Never commit: this tool's own state lives in $CCA_HOME (default
+# ~/.claude-accounts) and holds the account registry and the usage cache.
+# Nothing here should ever be a path inside a real space, but be explicit.
+accounts.json
+usage-cache.json
+.credentials.json
+.env

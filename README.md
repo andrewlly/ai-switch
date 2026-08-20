@@ -83,7 +83,7 @@ found" notice and comes up amnesiac (no projects, no history):
 
 ```console
 $ CLAUDE_CONFIG_DIR=$HOME/.claude claude auth status
-Claude configuration file not found at: /home/tcn/.claude/.claude.json
+Claude configuration file not found at: /home/you/.claude/.claude.json
 ```
 
 It does not fail loudly: credentials still resolve, so the session reports
@@ -119,9 +119,9 @@ A registry entry:
 ```json
 "work": {
   "tool": "claude",
-  "config_dir": "/home/tcn/.claude",
+  "config_dir": "/home/you/.claude",
   "legacy_default": true,
-  "description": "Scaleflux (original install)",
+  "description": "Work org (original install)",
   "alias": "ccw",
   "env": {},
   "created": "2026-08-14T01:52:35+00:00"
@@ -196,7 +196,7 @@ $ cca usage --sort
 * personal  pro   ▇▇▇▁▁▁▁▁▁▁  28%  ▇▁▁▁▁▁▁▁▁▁   3%   72%  5h  3h 58m
   client    team  ▁▁▁▁▁▁▁▁▁▁   0%  ▇▇▇▇▇▁▁▁▁▁  47%   53%  wk  4d 16h
   work      team  ▇▇▇▇▁▁▁▁▁▁  37%  ▇▇▇▇▇▁▁▁▁▁  47%   53%  wk  2d 10h
-  zhao      team  ▇▇▇▇▁▁▁▁▁▁  36%  ▇▇▇▇▇▁▁▁▁▁  51%   49%  wk   5d 0h
+  demo      team  ▇▇▇▇▁▁▁▁▁▁  36%  ▇▇▇▇▇▁▁▁▁▁  51%   49%  wk   5d 0h
   codex     plus               -   ▇▇▇▇▇▇▇▇▇▇ 100%    0%  wk  9h 46m  from last session, 5d 13h ago
 
 $ cca best
@@ -219,7 +219,7 @@ out entirely rather than squeezing the numbers (`--no-bars` forces that).
 │  codex     plus         -      ▇▇▇▇▇▇▇▇ 100%    0%     10h  from last…  │
 │★ personal  pro   ▇▇▁▁▁▁▁▁ 17%  ▇▁▁▁▁▁▁▁   2%   83%  4h 11m              │
 │  work      team  ▇▇▇▁▁▁▁▁ 27%  ▇▇▇▇▇▁▁▁  46%   54%  2d 10h              │
-│  zhao      team  ▇▇▇▁▁▁▁▁ 34%  ▇▇▇▇▇▁▁▁  51%   49%   5d 0h              │
+│  demo      team  ▇▇▇▁▁▁▁▁ 34%  ▇▇▇▇▇▁▁▁  51%   49%   5d 0h              │
 └ ↑↓ move   ⏎ launch   b best   r refresh   q quit ───────────────────────┘
 ```
 
@@ -270,9 +270,9 @@ from the newest rollout on disk and labelled `from last session`.
 from anywhere. `cca.py` exposes the one function a service wants:
 
 ```python
-import importlib.util
+import importlib.util, os
 spec = importlib.util.spec_from_file_location(
-    "cca", "/home/tcn/.local/share/cc-accounts/cca.py")
+    "cca", os.path.expanduser("~/.local/share/cc-accounts/cca.py"))
 cca = importlib.util.module_from_spec(spec); spec.loader.exec_module(cca)
 
 cca.usage_reports(ranked=True)   # every account, most headroom first
@@ -284,9 +284,10 @@ windows: {five_hour, seven_day}, binding, free_pct, credits}`; a window is
 could not be measured comes back with `ok: false` and the reason rather than
 being dropped. `cca usage --json` is the same data from a shell.
 
-This is what the **Perf Loop Console** consumes — see
-`webapp/backend/accounts.py` in the perf_ai repo, which imports this tool by
-path rather than shipping a second idea of which accounts exist.
+A service consuming this should import the tool rather than shipping a second
+idea of which accounts exist — the registry is one file with one owner, and a
+reader that reimplements it is a reader that goes stale the day an account is
+added.
 
 ## Adding accounts
 
