@@ -1,0 +1,376 @@
+# cca — coding-agent account manager
+
+Run any number of **Claude Code** and **Codex** accounts side by side, each in
+its own **space**: separate credentials, projects, history, sessions, skills
+and settings.
+
+One script, two entry points — both symlinks to `cca.py`. The name you invoke
+picks the agent:
+
+```
+cca                  launch the default claude account
+cxa                  launch the default codex account
+cca <name> [args]    launch that claude account; args pass through to claude
+cxa <name> [args]    launch that codex account
+```
+
+Every account also gets a three-letter shortcut of its own — `cc`/`cx` plus a
+letter from its name — created as another symlink to the same script:
+
+```
+ccw   work        ccc   client
+ccp   personal    cxc   codex      # every argument goes to the agent
+```
+
+So `ccc -c` is exactly `cca client -c`. These are managed for you: created when
+an account is added, kept as-is across a rename (your muscle memory survives),
+and removed when the account goes.
+
+Management subcommands work from either entry and act on the whole registry:
+
+```
+cca list             every account, both agents
+cca pick             choose one from a list, with live usage beside each
+cca usage            how much of each account's 5-hour and weekly limits is spent
+cca best --launch    start whichever account has the most left
+cca add <name>       a claude account   (cxa add <name> -> a codex one)
+cca login <name>
+cca status | doctor | which | default | tools
+```
+
+There are no shell functions and nothing to source — every one of these is a
+real command on `PATH`, so they work in scripts, tmux and non-interactive
+shells alike.
+
+## Two tools, two variables
+
+| | claude | codex |
+|---|---|---|
+| entry point | `cca` | `cxa` |
+| shortcut prefix | `cc` | `cx` |
+| binary | `claude` | `codex` |
+| config-dir variable | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
+| default dir | `~/.claude` | `~/.codex` |
+| credentials | `<space>/.credentials.json` | `<space>/auth.json` |
+| identity from | `.claude.json` → `oauthAccount` | `auth.json` → `id_token` JWT |
+| auth check | `claude auth status` (JSON) | `codex login status` (text) |
+| shareable assets | skills, agents, commands, output-styles, plugins, hooks | skills, plugins, rules, themes, prompts |
+| legacy quirk | **yes** — see below | no |
+
+An account records which tool it belongs to, and each entry only launches its
+own. Getting it wrong tells you the right command rather than failing vaguely:
+
+```console
+$ cxa work
+error: 'work' is a claude account; launch it with `cca work` (you used `cxa`)
+```
+
+Account names are unique across both agents.
+
+## The one non-obvious thing: `legacy_default`
+
+This affects **Claude only**. Codex is symmetric — `CODEX_HOME=~/.codex`
+selects the original account correctly.
+
+The account Claude Code installs *first* keeps its main config at
+`~/.claude.json` — in your **home root**, not inside `~/.claude`. Every later
+space keeps its config **inside** the space.
+
+That asymmetry is a trap. Passing `CLAUDE_CONFIG_DIR=$HOME/.claude` does
+**not** select the original account — Claude looks for
+`~/.claude/.claude.json`, finds nothing, prints a "configuration file not
+found" notice and comes up amnesiac (no projects, no history):
+
+```console
+$ CLAUDE_CONFIG_DIR=$HOME/.claude claude auth status
+Claude configuration file not found at: /home/tcn/.claude/.claude.json
+```
+
+It does not fail loudly: credentials still resolve, so the session reports
+itself logged in. The original account only works when `CLAUDE_CONFIG_DIR` is
+**unset**, so it is flagged `legacy_default: true` and launched by *removing*
+the variable. `cca doctor` flags any account that points at a tool's default
+dir without the right flag, in either direction.
+
+## Codex token expiry is not a liveness signal
+
+Codex's `id_token` carries an `exp` claim that goes stale within days, but the
+session stays valid because Codex holds a `refresh_token` and renews on
+demand. Treating `exp` as an expiry produces a false `token-expired` state on
+a perfectly good account, so cca reports Codex's `last_refresh` instead and
+never flags it. Claude's `expiresAt` *is* a real expiry and is flagged.
+
+## Layout
+
+```
+~/.local/share/cc-accounts/cca.py     the tool (stdlib-only Python)
+~/.local/share/cc-accounts/usage.py   rate-limit windows, live from the API
+~/.local/share/cc-accounts/picker.py  the full-screen chooser
+~/.local/bin/cca -> cca.py            entry point for claude
+~/.local/bin/cxa -> cca.py            entry point for codex
+~/.local/bin/ccw, ccp, ccc, cxc …     one shortcut per account
+~/.claude-accounts/accounts.json      the registry (v3)
+~/.claude-accounts/usage-cache.json   last good usage, for when a probe fails
+~/.claude-accounts/spaces/<name>/     spaces for new accounts
+```
+
+A registry entry:
+
+```json
+"work": {
+  "tool": "claude",
+  "config_dir": "/home/tcn/.claude",
+  "legacy_default": true,
+  "description": "Scaleflux (original install)",
+  "alias": "ccw",
+  "env": {},
+  "created": "2026-08-14T01:52:35+00:00"
+}
+```
+
+Alongside the accounts, the registry records which one each entry launches
+bare:
+
+```json
+"defaults": { "claude": "work", "codex": "codex" }
+```
+
+A tool with exactly one account needs no entry there at all — it is the
+default implicitly. Older registries are upgraded on first load: entries
+without a `tool` key are read as Claude accounts, the single global `default`
+is filed under its own tool, and a v1 registry also adopts an existing Codex
+install. Detection is skipped for directories already registered, so an
+upgrade can never adopt `~/.codex` twice.
+
+Nothing is ever migrated — `~/.claude`, `~/.claude-personal`, `~/.claude.json`
+and `~/.codex` stay exactly where they are.
+
+## Commands
+
+| command | what it does |
+|---|---|
+| `cca` / `cxa` | launch that agent's default account |
+| `ccw`, `ccp`, `ccc`, `cxc` … | per-account shortcuts; all args go to the agent |
+| `cca <name> [args]` | launch that claude account (`cxa <name>` for codex) |
+| `cca list [--json] [--du] [--tool T]` | table of accounts; `*` = this shell, `>` = default |
+| `cca pick` | **the chooser** — every account with live usage, arrow keys, ⏎ launches |
+| `cca usage [name] [--sort] [--json] [--cached] [--no-bars]` | how much of each account's limits is spent |
+| `cca best [--launch] [-q] [--json]` | the account with the most headroom left |
+| `cca run [--dry-run] <name> [args]` | same, explicitly; `--dry-run` prints the command |
+| `cca exec <name> -- <cmd>` | run any command inside an account's environment |
+| `cca add <name> [--tool T] [--dir P] [--alias A] [--login]` | create a space |
+| `cca rm <name> [--purge]` | unregister; `--purge` also deletes the space |
+| `cca rename <old> <new>` | rename; the space is untouched |
+| `cca status [name] [--json]` | authoritative auth status per account |
+| `cca which` | which account backs this shell |
+| `cca default [name]` | get/set what bare `cca`/`cxa` launches |
+| `cca login/logout <name>` | authenticate a space |
+| `cca link <name> <asset> --from <acct>` | symlink a shared asset in |
+| `cca unlink <name> <asset>` | remove that link |
+| `cca doctor` | health-check every account |
+| `cca env <name>` | print shell exports (`eval "$(cca env work)"`) |
+| `cca alias [name] [--set A] [--repair]` | show, set or rebuild the shortcuts |
+| `cca tools` | show what each entry point drives |
+
+### Argument order
+
+Everything **after** the account name is passed straight through to the tool,
+so cca's own flags go **before** it:
+
+```bash
+cca run --dry-run work -c      # cca's --dry-run
+cca run work --dry-run         # claude's (invalid) --dry-run
+```
+
+## Choosing an account by what it has left
+
+Every plan meters two rolling windows — five-hour and seven-day — and an
+account is only as usable as its **tighter** one. 5% of the five-hour window is
+worth nothing behind a weekly window at 99%, so everything here scores an
+account by the headroom in its binding window alone, and says which window that
+is.
+
+```console
+$ cca usage --sort
+  ACCOUNT   PLAN  5-HOUR           WEEK             FREE  IN  RESETS
+* personal  pro   ▇▇▇▁▁▁▁▁▁▁  28%  ▇▁▁▁▁▁▁▁▁▁   3%   72%  5h  3h 58m
+  client    team  ▁▁▁▁▁▁▁▁▁▁   0%  ▇▇▇▇▇▁▁▁▁▁  47%   53%  wk  4d 16h
+  work      team  ▇▇▇▇▁▁▁▁▁▁  37%  ▇▇▇▇▇▁▁▁▁▁  47%   53%  wk  2d 10h
+  zhao      team  ▇▇▇▇▁▁▁▁▁▁  36%  ▇▇▇▇▇▁▁▁▁▁  51%   49%  wk   5d 0h
+  codex     plus               -   ▇▇▇▇▇▇▇▇▇▇ 100%    0%  wk  9h 46m  from last session, 5d 13h ago
+
+$ cca best
+personal  (86% free in the 5h window, the tighter one)
+
+$ cca best --launch          # …and start it
+$ ccx() { cca best -q; }     # or just the name, for scripts
+```
+
+The bars are sized to whatever the terminal has left once every other column
+is satisfied, so they widen on a wide window, narrow on a small one, and drop
+out entirely rather than squeezing the numbers (`--no-bars` forces that).
+
+`cca pick` is the same information as a chooser:
+
+```
+┌ cca — 5 accounts, 4 live ───────────────────────────────────────────────┐
+│  ACCOUNT   PLAN  5-HOUR         WEEK           FREE  RESETS             │
+│  client    team  ▁▁▁▁▁▁▁▁  0%  ▇▇▇▇▇▁▁▁  47%   53%  4d 16h              │
+│  codex     plus         -      ▇▇▇▇▇▇▇▇ 100%    0%     10h  from last…  │
+│★ personal  pro   ▇▇▁▁▁▁▁▁ 17%  ▇▁▁▁▁▁▁▁   2%   83%  4h 11m              │
+│  work      team  ▇▇▇▁▁▁▁▁ 27%  ▇▇▇▇▇▁▁▁  46%   54%  2d 10h              │
+│  zhao      team  ▇▇▇▁▁▁▁▁ 34%  ▇▇▇▇▇▁▁▁  51%   49%   5d 0h              │
+└ ↑↓ move   ⏎ launch   b best   r refresh   q quit ───────────────────────┘
+```
+
+`↑↓`/`jk` move, `1`-`9` jump, `g`/`G` go to the ends, `b` jumps to `★` (the
+account with the most headroom), `r` re-probes, `q` quits, `⏎` launches — the
+process is replaced by the agent exactly as `cca <name>` would have done, so
+nothing wraps the session and nothing survives it. Bare `cca` still launches
+your default; it only opens the picker when there are several accounts and no
+default set.
+
+### Where the numbers come from
+
+**Live.** `GET /api/oauth/usage` with each account's own bearer token — the
+same call Claude Code's `/usage` makes — every account in parallel, so the
+picker opens in about a second. A cached figure is true as of whenever that
+account last ran, which for the idle account you are trying to switch *to* is
+exactly when it is least informative.
+
+A cache is still written after every successful probe and read back **only**
+when a live probe fails, always labelled with its age, because a number with an
+unstated age is worse than no number. Two corrections keep an old number
+honest: a window whose reset time has passed reads as 0% (it rolled over while
+nobody was looking), and everything else carries how stale it is. `--cached`
+skips the network entirely — that is a request, not a failure, so those rows
+say `last reading 1m ago` with no reason attached.
+
+**The endpoint that reports your limits has a limit of its own** — on how
+often you may ask, not on what you have spent. A burst of probes earns an HTTP
+429 with a `Retry-After` of a couple of minutes, and the row falls back to its
+last reading rather than going blank:
+
+```
+work  team  ▇▇▇▁▁▁▁▁ 37%  ▇▇▇▇▁▁▁▁ 47%  53%  wk  2d 10h  last reading 3m ago (usage API busy, retry in 62s)
+```
+
+Deliberately never phrased as "rate-limited": read on a usage row, that says
+the *account* is spent, which is the one thing it does not mean. The server's
+own `Retry-After` is quoted in seconds, because it is a countdown somebody is
+about to wait out.
+
+Codex has no equivalent endpoint — it reports limits as a `rate_limits` event
+inside the session rollout it writes while working — so a codex account is read
+from the newest rollout on disk and labelled `from last session`.
+
+### As a library
+
+`usage.py` takes plain dicts, not registry objects, so it can be loaded by path
+from anywhere. `cca.py` exposes the one function a service wants:
+
+```python
+import importlib.util
+spec = importlib.util.spec_from_file_location(
+    "cca", "/home/tcn/.local/share/cc-accounts/cca.py")
+cca = importlib.util.module_from_spec(spec); spec.loader.exec_module(cca)
+
+cca.usage_reports(ranked=True)   # every account, most headroom first
+```
+
+Each report is `{account, tool, plan, email, ok, error, source, stale_seconds,
+windows: {five_hour, seven_day}, binding, free_pct, credits}`; a window is
+`{used_pct, free_pct, resets_at, resets_in, rolled_over}`. An account that
+could not be measured comes back with `ok: false` and the reason rather than
+being dropped. `cca usage --json` is the same data from a shell.
+
+This is what the **Perf Loop Console** consumes — see
+`webapp/backend/accounts.py` in the perf_ai repo, which imports this tool by
+path rather than shipping a second idea of which accounts exist.
+
+## Adding accounts
+
+The entry you use decides the agent — no flag needed:
+
+```bash
+cca add client --description "Acme contract"   # a claude account
+cxa add work                                   # a codex account
+cxa login work                                 # OAuth into that space alone
+cxa work                                       # launch it
+```
+
+`--tool` overrides the entry if you ever want `cca add x --tool codex`, and
+`--alias` overrides the generated shortcut. Shortcut allocation walks the
+letters of the account name (`client` → `ccc`; if that is taken, `ccl`, `cci`,
+…) and refuses any name that is an entry point or already a real command, so
+nothing on your `PATH` is ever shadowed. Only symlinks pointing at this script
+are ever removed.
+
+## Sharing assets
+
+Spaces are sealed by default. Share deliberately, and only within one tool:
+
+```bash
+cca link personal skills --from work
+```
+
+Cross-tool links are refused (a Claude skill is not a Codex skill), as are
+credentials and config files. A link never overwrites a real directory.
+
+## Prompt integration
+
+Every launched account exports `CCA_ACCOUNT` and `CCA_TOOL`, so the prompt
+needs no helper function:
+
+```bash
+PS1='[${CCA_ACCOUNT:-default}] '$PS1
+```
+
+## Why `cca` and not `cc`
+
+`cc` is the system C compiler (`/usr/bin/cc` → gcc). Because `~/.local/bin`
+comes **first** on `PATH`, installing a `cc` there would shadow the compiler
+for every build on this machine.
+
+## Extending
+
+The file is flat on purpose. To support another agent, subclass `Tool`:
+
+```python
+class MyTool(Tool):
+    name = "mytool"
+    binary = "mytool"
+    config_env = "MYTOOL_HOME"
+    credentials_name = "creds.json"
+    linkable = ("skills",)
+    # then: config_file, credentials_file, identity, auth_status,
+    #       login_argv, logout_argv, detect
+```
+
+…and add an instance to `TOOLS`. Everything else — listing, doctor, linking,
+purge guards — works off that interface.
+
+A new agent also wants an entry point: add it to `ENTRYPOINTS` and symlink
+the script under that name in `~/.local/bin`.
+
+Other extension points: a new subcommand is a `cmd_*` function plus a
+subparser plus a name in `SUBCOMMANDS`; `SESSION_ENV` lists the variables
+stripped on launch; each account's `env` map is applied at launch (no CLI
+setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
+
+## Tests
+
+```bash
+python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
+python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
+```
+
+Hermetic, both of them. `test_cca.py` runs against a temporary `CCA_HOME`
+**and** a fake home directory and a temporary `BIN_DIR`, so account detection
+can never see or adopt your real accounts and the suite can never rewrite your
+real `~/.local/bin`. `test_usage.py` never opens a socket — every live probe
+goes through an injected opener — and asserts two things that are easy to break
+by accident: that every picker line is exactly the terminal width at every
+width from 40 to 132 columns, and that `fmt_duration` never returns a seventh
+character (which is how a row once pushed the frame's right edge off the
+screen).
