@@ -68,6 +68,22 @@ def git(repo, *args, check=True):
     return (p.stdout or "").strip()
 
 
+class NoTmux(fleet.Doer):
+    """Runs the git half for real; never reaches a tmux server.
+
+    A test calling `up` without --dry-run would otherwise create sessions on
+    the machine running the suite - and `-s fleet` would land on the
+    operator's own. Recorded, not run; --dry-run output is untouched, so the
+    assertions on the printed commands still see everything.
+    """
+
+    def __call__(self, argv, *, cwd=None, check=True):
+        if not self.dry_run and argv and argv[0].endswith("tmux"):
+            self.commands.append(list(argv))
+            return 0
+        return super().__call__(argv, cwd=cwd, check=check)
+
+
 class Base(unittest.TestCase):
     def setUp(self):
         self.tmp = Path(tempfile.mkdtemp(prefix="fleet-case-"))
@@ -92,6 +108,11 @@ class Base(unittest.TestCase):
         cca.which = lambda binary: FAKE_BINARIES.get(binary)
         fleet.has_session = lambda name: False
         fleet.session_panes = lambda name: []
+        # Nothing in this suite may reach a real tmux server: `up` without
+        # --dry-run would otherwise create sessions on the machine running the
+        # tests, and `-s fleet` would collide with the operator's own.
+        self._saved["Doer"] = fleet.Doer
+        fleet.Doer = NoTmux
 
         # A repository with one commit, and nothing else in it.
         self.repo = self.tmp / "repo"
@@ -104,6 +125,7 @@ class Base(unittest.TestCase):
         self.fleet_dir = self.tmp / "repo-fleet"
 
     def _restore(self):
+        fleet.Doer = self._saved["Doer"]
         cca.BIN_DIR = self._saved["BIN_DIR"]
         cca.which = self._saved["which"]
         fleet.has_session = self._saved["has_session"]
@@ -123,9 +145,10 @@ class Base(unittest.TestCase):
             self.output = buf.getvalue()
 
     def up(self, workers=None, checkers=None, orch="work", no_orch=False,
-           base=None, session="fleet", dry_run=True):
+           base=None, session="fleet", dry_run=True, goal=None, gates=None):
         args = argparse.Namespace(
-            session=session, repo=str(self.repo), base=base,
+            session=session, repo=str(self.repo), base=base, goal=goal,
+            gates=gates,
             worker=workers, checker=checkers, no_orch=no_orch,
             # The default here is a convenience, not the CLI's: --no-orch and
             # -o are refused together, so the helper drops the default.
@@ -562,6 +585,103 @@ class TestDown(Base):
         rc, out = self.down()
         self.assertEqual(rc, 0)
         self.assertIn("no tmux session", out)
+
+
+class TestBoardMode(Base):
+    """`--goal` is the difference between a fleet you drive and one that runs."""
+
+    def setUp(self):
+        super().setUp()
+        _, self.out = self.up(workers=["work:db", "cx:design"],
+                              checkers=["client:review"],
+                              goal="Add three missing contracts",
+                              gates="python3 run_tests.py")
+        self.written = self.writes(self.out)
+
+    def briefs(self):
+        return self.fleet_dir / "briefs" / "fleet"
+
+    def test_a_board_and_a_brief_per_member_are_written(self):
+        self.assertEqual(self.written, [
+            str(self.fleet_dir / "boards" / "fleet.json"),
+            str(self.briefs() / "orch.md"),
+            str(self.briefs() / "worker-db.md"),
+            str(self.briefs() / "worker-design.md"),
+            str(self.briefs() / "checker-review.md"),
+        ])
+
+    def test_the_board_records_the_goal_and_turns_review_on_for_a_checker(self):
+        _, out = self.up(workers=["work:db"], checkers=["client:review"],
+                         goal="G", dry_run=False)
+        data = json.loads((self.fleet_dir / "boards" / "fleet.json").read_text())
+        self.assertEqual(data["goal"], "G")
+        self.assertTrue(data["auto_review"])
+        self.assertEqual(data["tasks"], [])
+
+    def test_without_a_checker_nothing_waits_for_review(self):
+        _, out = self.up(workers=["work:db"], goal="G", dry_run=False)
+        data = json.loads((self.fleet_dir / "boards" / "fleet.json").read_text())
+        self.assertFalse(data["auto_review"])
+
+    def test_every_member_starts_inside_its_loop_not_bare(self):
+        cmds = self.commands(self.out)
+        spawns = [c for c in cmds if c[1:2] == ["respawn-pane"]]
+        self.assertEqual(len(spawns), 4)
+        for cmd in spawns:
+            window = cmd[cmd.index("-t") + 1].split(":", 1)[1]
+            prompt = cmd[-1]
+            with self.subTest(window=window):
+                self.assertIn(str(self.briefs() / f"{window}.md"), prompt)
+
+    def test_a_member_is_told_its_own_role_not_the_orchestrators(self):
+        spawns = {c[c.index("-t") + 1].split(":", 1)[1]: c[-1]
+                  for c in self.commands(self.out) if c[1:2] == ["respawn-pane"]}
+        self.assertIn("You are the orchestrator", spawns["orch"])
+        self.assertIn("You are a worker", spawns["worker-db"])
+        self.assertIn("You are a checker", spawns["checker-review"])
+        self.assertNotIn("orchestrator", spawns["worker-db"])
+
+    def test_a_worker_brief_carries_the_loop_its_tree_and_the_gates(self):
+        _, out = self.up(workers=["work:db"], goal="G",
+                         gates="python3 run_tests.py", dry_run=False)
+        text = (self.briefs() / "worker-db.md").read_text()
+        self.assertIn("ccfleet board next --as worker-db --wait 240", text)
+        self.assertIn("ccfleet board done", text)
+        self.assertIn(str(self.fleet_dir / "worker-db"), text)
+        self.assertIn("fleet/worker-db", text)
+        self.assertIn("python3 run_tests.py", text)
+        self.assertIn("exit 5", text)                 # how the loop ends
+
+    def test_a_checker_brief_reviews_and_never_edits(self):
+        _, out = self.up(workers=["work:db"], checkers=["client:review"],
+                         goal="G", dry_run=False)
+        text = (self.briefs() / "checker-review.md").read_text()
+        self.assertIn("You are a **checker**", text)
+        self.assertIn("you do not edit", text)
+        self.assertNotIn("worktree - your cwd", text)
+
+    def test_the_orchestrator_is_told_to_fill_the_board_not_to_work(self):
+        _, out = self.up(workers=["work:db"], goal="Add the contracts",
+                         dry_run=False)
+        text = (self.briefs() / "orch.md").read_text()
+        self.assertIn("Add the contracts", text)
+        self.assertIn("ccfleet board add", text)
+        self.assertIn("you fill the board, they empty it", text)
+        self.assertIn("You do not do the work yourself", text)
+
+    def test_a_named_session_is_spelled_into_every_command_a_member_runs(self):
+        _, out = self.up(workers=["work:db"], goal="G", session="bt",
+                         dry_run=False)
+        text = (self.fleet_dir / "briefs" / "bt" / "worker-db.md").read_text()
+        self.assertIn("ccfleet board -s bt next --as worker-db", text)
+
+    def test_without_a_goal_there_is_no_board_and_members_stay_bare(self):
+        _, out = self.up(workers=["work:db"], checkers=["client:review"])
+        self.assertEqual(self.writes(out),
+                         [str(self.briefs() / "orch.md")])
+        spawns = [c for c in self.commands(out) if c[1:2] == ["respawn-pane"]]
+        bare = [c for c in spawns if len(c) - c.index("-c") - 2 == 2]
+        self.assertEqual(len(bare), 2)                # both members, no prompt
 
 
 class TestOccupancy(Base):

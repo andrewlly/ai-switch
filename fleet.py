@@ -56,7 +56,21 @@ def _load_cca():
     return module
 
 
+def _load_sibling(name: str):
+    """Load a module from beside this script, by path - see _load_cca."""
+    import importlib.util
+    path = SCRIPT.parent / f"{name}.py"
+    if not path.is_file():
+        print(f"error: {name}.py not found beside {SCRIPT}", file=sys.stderr)
+        sys.exit(1)
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 cca = _load_cca()
+board = _load_sibling("board")
 c = cca.c
 die = cca.die
 warn = cca.warn
@@ -420,7 +434,7 @@ def briefs_dir(fleet_dir: Path, session: str) -> Path:
 
 
 def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
-                  members: list[dict]) -> str:
+                  members: list[dict], goal: str = "", gates: str = "") -> str:
     """The orchestrator's opening brief, written to disk rather than typed.
 
     It is a file for the same three reasons the orchestrator writes its own
@@ -466,21 +480,207 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
         "them. Your first message to each must be self-contained.",
         f"- `ccfleet status --json` re-reads this map from tmux and git at any "
         f"time; it is current, this file is not.",
-        "",
-        "## Now",
-        "",
-        "Do not start any work yet. Confirm the map back to me - including "
-        "which sessions you can reach on which channel - and wait for the job.",
-        "",
     ]
+    if goal:
+        cmd = board_cmd(session)
+        lines += [
+            "",
+            "## The goal",
+            "",
+            f"> {goal}",
+            "",
+            "## How this fleet works - read this twice",
+            "",
+            "Every member is already running its own loop against a shared task "
+            "board, waiting for work. They are not waiting for you to type at "
+            "them, and you must not: **you fill the board, they empty it.**",
+            "",
+            f"- Board: `{board_path(fleet_dir, session)}`",
+            f"- Add a task: `{cmd} add --title \"...\" --brief \"...\" "
+            f"--files \"a.py b.py\" [--dep t1] [--role worker|checker]`",
+            f"- Watch it: `{cmd} list`",
+            "",
+            "### Your job, in order",
+            "",
+            "1. **Understand the goal well enough to split it.** Read what you "
+            "must. This is the one part that is yours alone.",
+            "2. **Decompose it into tasks, one `add` per independent unit of "
+            "work.** Each task names the files it owns, and no two tasks own "
+            "the same file. Work that must happen in order gets `--dep`; the "
+            "board will not hand out a task until what it depends on is "
+            "settled.",
+            "3. **Write each `--brief` as if the member has never seen this "
+            "repository** - it has not seen your context, only its own. State "
+            "the change, the files, and how to tell it worked.",
+            "4. **Then stop and watch.** Poll `list`. Members claim, work, "
+            "report; a checker accepts or rejects; a rejected task goes back "
+            "on the board with the reason and is picked up again. None of that "
+            "needs you.",
+            "5. **Merge what is accepted**, one branch at a time, re-running "
+            "the gates after each. Report to the human at the end.",
+            "",
+            "**You do not do the work yourself and you do not add a task you "
+            "then do.** If the goal turns out not to split, say so and stop - "
+            "do not quietly absorb it.",
+        ]
+        if gates:
+            lines += ["", f"The gates every member must pass: `{gates}`"]
+        lines += [
+            "",
+            "Start now: decompose the goal and fill the board.",
+            "",
+        ]
+    else:
+        lines += [
+            "",
+            "## Now",
+            "",
+            "Do not start any work yet. Confirm the map back to me - including "
+            "which sessions you can reach on which channel - and wait for the "
+            "job. When it comes, you decompose and delegate it; you do not do "
+            "it yourself.",
+            "",
+        ]
     return "\n".join(lines)
 
 
-def kickoff_prompt(brief: Path) -> str:
-    """One line, because it is typed onto a command line by tmux."""
-    return (f"You are the orchestrator of a ccfleet. Read {brief} - it is your "
-            f"kickoff brief, and it names the operating manual you work from. "
-            f"Follow it.")
+def board_path(fleet_dir: Path, session: str) -> Path:
+    """One board per fleet, named after it - two fleets on one repo are two
+    independent pieces of work and must not claim from each other."""
+    return fleet_dir / "boards" / f"{session}.json"
+
+
+def board_cmd(session: str) -> str:
+    """The literal command a member types. Spelled out with its session, so a
+    brief can be followed without the member knowing which fleet it is in."""
+    return "ccfleet board" + ("" if session == DEFAULT_SESSION else f" -s {session}")
+
+
+def kickoff_prompt(brief: Path, role: str = "orch") -> str:
+    """One line, because it is the argv a window is launched with.
+
+    Role-aware: the same sentence for every member would tell three of them
+    they are the orchestrator, and an agent told that acts like one.
+    """
+    if role == "orch":
+        return (f"You are the orchestrator of a ccfleet. Read {brief} - it is "
+                f"your kickoff brief, and it names the operating manual you "
+                f"work from. Follow it.")
+    return (f"You are a {role} in a ccfleet. Read {brief} - it is your brief, "
+            f"and it contains the loop you are to run. Start that loop now, "
+            f"and stay in it until the board tells you it is drained.")
+
+
+# --------------------------------------------------------------------------
+# briefs a member works from
+# --------------------------------------------------------------------------
+
+def render_task(task: dict, member: str, cmd: str) -> str:
+    """A claimed task, written for whoever has to act on it.
+
+    Everything the member needs is here and nowhere else: the previous
+    rejection it has to answer, the files it owns, and the literal commands
+    that end the task. A member that has to go and ask what to do next is a
+    member the board has failed.
+    """
+    lines = [f"TASK {task['id']}   {task['title']}"]
+    if task["attempts"] > 1:
+        lines.append(f"(attempt {task['attempts']} - read the notes below)")
+    if task.get("files"):
+        lines.append(f"files you own: {task['files']}")
+    if task.get("reviews"):
+        lines.append(f"reviewing: {task['reviews']}")
+    if task.get("brief"):
+        lines += ["", task["brief"]]
+    if task.get("notes"):
+        lines += ["", "notes so far:"] + [f"  - {n}" for n in task["notes"]]
+    lines.append("")
+    if task["role"] == "checker":
+        target = task.get("reviews") or "<task>"
+        lines += [
+            "When you have reviewed it, one of:",
+            f"  {cmd} accept {target} --note \"<why it passes>\"",
+            f"  {cmd} reject {target} --why \"<what must change>\"",
+        ]
+    else:
+        lines += [
+            "When it is finished and committed:",
+            f"  {cmd} done {task['id']} --as {member} --note \"<what you did>\"",
+            "If you cannot finish it:",
+            f"  {cmd} block {task['id']} --why \"<why>\"",
+        ]
+    lines += ["", f"Then go straight back to: {cmd} next --as {member} --wait 240"]
+    return "\n".join(lines)
+
+
+def loop_brief(member: dict, session: str, repo: Path, base_label: str,
+               gates: str = "") -> str:
+    """The one thing a worker or checker is told, once, at launch.
+
+    It is a loop rather than a task because the board decides what the work is
+    and when there is more of it. A member briefed this way needs nothing typed
+    at it ever again - which is what makes a fleet of foreign CLIs coordinate
+    at all.
+    """
+    cmd = board_cmd(session)
+    name = member["window"]
+    checker = member["role"] == "checker"
+    head = [
+        f"# Brief: {name}",
+        "",
+        f"You are a **{member['role']}** in a ccfleet, working from a shared "
+        f"task board. You are one of several agent sessions; you never talk to "
+        f"the others, and the board is the only thing you coordinate through.",
+        "",
+    ]
+    if checker:
+        head += [
+            f"- You review; you do not edit. Not in `{repo}`, not in any "
+            f"worktree, not \"just this one line\".",
+            f"- Repository: `{repo}`",
+            f"- Review a branch with: `git -C {repo} diff {base_label.split()[0]}"
+            f"...<branch>`, and run its tests inside that worker's worktree.",
+        ]
+    else:
+        head += [
+            f"- Worktree - your cwd, and the **only** tree you may edit: "
+            f"`{member['worktree']}`",
+            f"- Branch: `{member.get('branch')}`  (base: {base_label})",
+            "- Never edit the main checkout or another worker's worktree. "
+            "Commit your work on your own branch.",
+        ]
+    body = [
+        "",
+        "## Your loop - start it now, and stay in it",
+        "",
+        f"1. `{cmd} next --as {name} --wait 240`",
+        "   - exit 0: the task is printed. Do exactly that, nothing more.",
+        "   - exit 4: nothing claimable yet. Run the same command again.",
+        "   - exit 5: the board is drained. Report what you did and stop.",
+        "2. Do the task.",
+    ]
+    if gates:
+        body.append(f"3. Run the gates before reporting it done: {gates}")
+    report = (f"`{cmd} accept <id>` / `{cmd} reject <id> --why \"...\"`"
+              if checker else
+              f"`{cmd} done <id> --as {name} --note \"...\"`, or "
+              f"`{cmd} block <id> --why \"...\"`")
+    body += [
+        f"{'4' if gates else '3'}. Report it: {report}. Each task prints its "
+        f"own line with the id already filled in - use that.",
+        f"{'5' if gates else '4'}. Go back to step 1.",
+        "",
+        "Rules that make this work:",
+        "",
+        "- **Only ever work on a task `next` gave you.** Do not read the board "
+        "and pick something you like the look of; claiming is what stops two "
+        "members doing the same task.",
+        "- **Do not stop at exit 4.** It means the work you are waiting on is "
+        "still in someone else's hands. Only exit 5 ends your loop.",
+        "- A rejected task comes back to you through `next` like any other, "
+        "carrying the reason. Answer the reason.",
+    ]
+    return "\n".join(head + body) + "\n"
 
 
 # --------------------------------------------------------------------------
@@ -570,12 +770,29 @@ def cmd_up(args) -> int:
     print_map(session, repo, base_label, fleet_dir, all_members,
               dry_run=args.dry_run)
 
+    goal = (getattr(args, "goal", "") or "").strip()
+    gates = (getattr(args, "gates", "") or "").strip()
     do = Doer(args.dry_run)
+    briefs = briefs_dir(fleet_dir, session)
+    if goal:
+        # A checker in the fleet is what turns "the worker says it is done"
+        # into "a second session agreed" - so it is the board's review switch.
+        do.write(board_path(fleet_dir, session), json.dumps({
+            "version": board.VERSION, "goal": goal, "seq": 0, "tasks": [],
+            "auto_review": any(m["role"] == "checker" for m in members),
+        }, indent=2, sort_keys=True) + "\n", "task board")
     if orch:
-        orch["brief"] = briefs_dir(fleet_dir, session) / "orch.md"
+        orch["brief"] = briefs / "orch.md"
         do.write(orch["brief"],
-                 kickoff_brief(session, repo, base_label, fleet_dir, members),
+                 kickoff_brief(session, repo, base_label, fleet_dir, members,
+                               goal, gates),
                  "kickoff brief")
+    if goal:
+        for m in members:
+            m["brief"] = briefs / f"{m['window']}.md"
+            do.write(m["brief"],
+                     loop_brief(m, session, repo, base_label, gates),
+                     f"{m['window']} loop brief")
     for m in members:
         if m["role"] != "worker":
             continue
@@ -589,6 +806,11 @@ def cmd_up(args) -> int:
     exe = tmux_bin()
     if orch:
         orch["prompt"] = kickoff_prompt(orch["brief"])
+    # Without a goal, members start bare and wait to be briefed by hand. With
+    # one, every member starts inside its loop - which is the whole difference.
+    for m in members:
+        if m.get("brief"):
+            m["prompt"] = kickoff_prompt(m["brief"], m["role"])
     for n, m in enumerate(all_members):
         cwd = m["worktree"] if m["role"] == "worker" else repo
         spawn(do, exe, session, m, cwd, first=(n == 0))
@@ -604,6 +826,8 @@ def cmd_up(args) -> int:
     info(f"fleet {session!r} is up")
     print(f"\n  attach:   tmux attach -t {session}")
     print(f"  a window: tmux attach -t {session}:{all_members[-1]['window']}")
+    if goal:
+        print(f"\n  board:    {board_cmd(session)} list")
     if orch:
         print(f"\n{c.dim}The orch window was pointed at "
               f"{tilde(orch['brief'])}, which names {tilde(MANUAL)}.{c.reset}")
@@ -849,6 +1073,102 @@ def cmd_down(args) -> int:
 
 
 # --------------------------------------------------------------------------
+# board
+# --------------------------------------------------------------------------
+
+def open_board(args) -> "board.Board":
+    repo = main_worktree(git_root(Path(args.repo).expanduser() if args.repo
+                                  else Path.cwd()))
+    return board.Board(board_path(fleet_dir_for(repo), args.session))
+
+
+def cmd_board(args) -> int:
+    bd = open_board(args)
+    cmd = board_cmd(args.session)
+    verb = args.board_cmd
+
+    if verb == "init":
+        bd.init(args.goal or "", bool(args.review))
+        info(f"board created: {tilde(bd.path)}")
+        return 0
+
+    if not bd.exists() and verb != "list":
+        die(f"no board at {tilde(bd.path)} - `ccfleet up --goal \"...\"` "
+            f"creates one, or `{cmd} init --goal \"...\"`")
+
+    if verb == "add":
+        task_id = bd.add(args.title, args.brief or "", args.role,
+                         args.dep or [], args.files or "")
+        print(task_id)
+        return 0
+
+    if verb == "next":
+        code, task = bd.wait_claim(args.member, float(args.wait or 0))
+        if code == board.GOT_TASK:
+            print(render_task(task, args.member, cmd))
+            return 0
+        if code == board.DRAINED:
+            print("The board is drained: nothing left to claim and nobody "
+                  "still working. Your loop is over - report what you did.")
+            return board.DRAINED
+        print(f"No task for {args.member} yet - work it depends on is still "
+              f"with someone else. Run this same command again.")
+        return board.NO_TASK_YET
+
+    try:
+        if verb == "done":
+            task = bd.done(args.id, args.member or "", args.note or "")
+            state = task["state"]
+            print(f"{task['id']} -> {state}"
+                  + ("  (a review task is now on the board)"
+                     if state == "review" else ""))
+        elif verb == "accept":
+            print(f"{bd.accept(args.id, args.note or '')['id']} -> accepted")
+        elif verb == "reject":
+            print(f"{bd.reject(args.id, args.why)['id']} -> pending again "
+                  f"(the reason travels with it)")
+        elif verb == "block":
+            print(f"{bd.block(args.id, args.why)['id']} -> blocked")
+    except KeyError:
+        die(f"no task {args.id!r} on {tilde(bd.path)}")
+
+    if verb == "list":
+        return print_board(bd, args)
+    return 0
+
+
+def print_board(bd: "board.Board", args) -> int:
+    data = bd.summary()
+    if getattr(args, "json", False):
+        print(json.dumps(data, indent=2))
+        return 0
+    if not bd.exists():
+        print(f"{c.dim}no board for session {args.session!r}{c.reset}")
+        return 0
+    if data["goal"]:
+        print(f"{c.bold}goal{c.reset}  {data['goal']}")
+    if not data["tasks"]:
+        print(f"{c.dim}no tasks yet{c.reset}")
+        return 0
+    cols = [("id", "ID"), ("state", "STATE"), ("role", "ROLE"),
+            ("owner", "OWNER"), ("deps", "DEPS"), ("title", "TITLE")]
+    rows = [{"id": t["id"], "state": t["state"], "role": t["role"],
+             "owner": t["owner"] or "-", "deps": ",".join(t["deps"]) or "-",
+             "title": t["title"]} for t in data["tasks"]]
+    widths = {k: max(len(h), *(len(str(r[k])) for r in rows)) for k, h in cols}
+    print(f"{c.bold}{'  '.join(h.ljust(widths[k]) for k, h in cols)}{c.reset}")
+    tone = {"blocked": c.red, "review": c.yellow, "accepted": c.green,
+            "done": c.green}
+    for r in rows:
+        line = "  ".join(str(r[k]).ljust(widths[k]) for k, _ in cols).rstrip()
+        print(f"{tone.get(r['state'], '')}{line}{c.reset}")
+    counts = "  ".join(f"{n} {state}" for state, n in data["counts"].items() if n)
+    print(f"\n{counts}"
+          + (f"   {c.green}drained{c.reset}" if data["drained"] else ""))
+    return 0
+
+
+# --------------------------------------------------------------------------
 # plumbing
 # --------------------------------------------------------------------------
 
@@ -894,6 +1214,13 @@ def build_parser() -> argparse.ArgumentParser:
                         "is on, else that agent's default)")
     s.add_argument("--no-orch", action="store_true",
                    help="no orchestrator window - drive the fleet from here")
+    s.add_argument("-g", "--goal", metavar="TEXT",
+                   help="what the fleet is for. Creates a shared task board "
+                        "and starts every member in its claim loop, instead of "
+                        "leaving them bare to be briefed by hand")
+    s.add_argument("--gates", metavar="CMD",
+                   help="the literal commands every member must pass before "
+                        "reporting a task done")
     s.add_argument("--dry-run", action="store_true",
                    help="print every git and tmux command instead of running it")
     s.set_defaults(func=cmd_up)
@@ -902,6 +1229,44 @@ def build_parser() -> argparse.ArgumentParser:
     common(s)
     s.add_argument("--json", action="store_true")
     s.set_defaults(func=cmd_status)
+
+    s = sub.add_parser("board", help="the shared task list members work from")
+    common(s)
+    bsub = s.add_subparsers(dest="board_cmd", required=True)
+
+    b = bsub.add_parser("init", help="create an empty board")
+    b.add_argument("--goal", help="what this fleet is for")
+    b.add_argument("--review", action="store_true",
+                   help="a finished task waits for a checker to accept it")
+    b = bsub.add_parser("add", help="put a task on the board")
+    b.add_argument("--title", required=True)
+    b.add_argument("--brief", help="everything the member needs to do it")
+    b.add_argument("--files", help="the files this task owns; no two tasks share one")
+    b.add_argument("--role", default="worker", choices=sorted(board.ROLES))
+    b.add_argument("--dep", action="append", metavar="ID",
+                   help="task that must settle first; repeatable")
+    b = bsub.add_parser("next", help="claim the next task for a member (blocks)")
+    b.add_argument("--as", dest="member", required=True, metavar="MEMBER")
+    b.add_argument("--wait", type=float, default=240,
+                   help="seconds to wait for work before exiting 4 (default 240)")
+    b = bsub.add_parser("done", help="a member reports a task finished")
+    b.add_argument("id")
+    b.add_argument("--as", dest="member", metavar="MEMBER")
+    b.add_argument("--note")
+    b = bsub.add_parser("accept", help="a checker passes a task")
+    b.add_argument("id")
+    b.add_argument("--note")
+    b = bsub.add_parser("reject", help="a checker sends a task back, with why")
+    b.add_argument("id")
+    b.add_argument("--why", required=True)
+    b = bsub.add_parser("block", help="a task cannot be finished")
+    b.add_argument("id")
+    b.add_argument("--why", required=True)
+    b = bsub.add_parser("list", help="every task and its state")
+    b.add_argument("--json", action="store_true")
+    for b in bsub.choices.values():
+        b.set_defaults(func=cmd_board)
+    s.set_defaults(func=cmd_board)
 
     s = sub.add_parser("down", help="kill the session; remove only safe worktrees")
     common(s)

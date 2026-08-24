@@ -44,6 +44,38 @@ Commit it, tell them the new base, and have them confirm the rebase.
 
 ---
 
+## 0. If there is a board, that is the protocol
+
+`ccfleet up --goal ...` writes a **task board** and starts every member in a
+claim loop against it. Your kickoff brief says so, and names the board file. If
+you have one, sections 2 and 3 below are not your job: nobody needs typing at,
+because every member is already sitting in `ccfleet board next --wait`, blocked
+until there is work for it.
+
+Your loop is then:
+
+```bash
+ccfleet board add --title "..." --files "a.py b.py" --brief "..." [--dep t1]
+ccfleet board list          # watch; poll this, not the panes
+```
+
+- **One task per independent unit of work, and no two tasks own the same
+  file.** File ownership is the whole collision story once members work in
+  parallel.
+- **`--dep` is how you sequence.** A task is not handed out until everything it
+  depends on has settled, so you never have to time anything.
+- **Write `--brief` for a reader who has none of your context** — it has not
+  seen your conversation, only its own worktree.
+- **Then stop and watch.** Members claim, work and report; a checker accepts or
+  rejects; a rejected task goes back on the board carrying the reason and is
+  picked up again. None of that needs you.
+- **Merge what is `accepted`,** one branch at a time, re-running the gates.
+
+You still do not do the work. A task you `add` and then do yourself is the same
+failure as absorbing the whole job.
+
+---
+
 ## 1. Read the map before anything else
 
 Your kickoff prompt contained the map. Re-read it at any time, from the main
@@ -293,6 +325,8 @@ in the output; it is yours to delete.
 | a worker edited the main checkout | your brief did not name the worktree as its only tree |
 | every worker still on its opening screen while you have an answer | **you absorbed the job.** Re-read the rule at the top, then brief it out |
 | a worker cannot find a file you just wrote | it is untracked or uncommitted, so it is not in that worktree's commit |
+| the board has pending tasks and every member is idle | their dependencies are blocked. `block` cascades, so check for a `blocked` task upstream |
+| a task keeps coming back rejected | the brief is underspecified, not the worker. Rewrite it with the acceptance test in it |
 | a worker reports a missing dependency or config file | §6 — its worktree has no untracked files at all |
 | `git worktree add` refused | that branch is checked out elsewhere; `ccfleet status` shows where |
 

@@ -109,6 +109,7 @@ never flags it. Claude's `expiresAt` *is* a real expiry and is flagged.
 ~/.local/share/cc-accounts/usage.py   rate-limit windows, live from the API
 ~/.local/share/cc-accounts/picker.py  the full-screen chooser
 ~/.local/share/cc-accounts/fleet.py   ccfleet - a tmux fleet of sessions
+~/.local/share/cc-accounts/board.py   the shared task board members claim from
 ~/.local/share/cc-accounts/FLEET.md   the orchestrator's operating manual
 ~/.local/bin/cca -> cca.py            entry point for claude
 ~/.local/bin/cxa -> cca.py            entry point for codex
@@ -176,8 +177,12 @@ and `~/.codex` stay exactly where they are.
 | `cca env <name>` | print shell exports (`eval "$(cca env work)"`) |
 | `cca alias [name] [--set A] [--repair]` | show, set or rebuild the shortcuts |
 | `cca tools` | show what each entry point drives |
-| `ccfleet up [-s S] [-o A] [-w A[:L]]… [-c A[:L]]… [--repo D] [--base R] [--no-orch] [--dry-run]` | start a tmux fleet ([below](#a-fleet-of-sessions-ccfleet)) |
+| `ccfleet up [-g GOAL] [--gates CMD] [-s S] [-o A] [-w A[:L]]… [-c A[:L]]… [--repo D] [--base R] [--no-orch] [--dry-run]` | start a tmux fleet ([below](#a-fleet-of-sessions-ccfleet)); `-g` also starts every member working |
 | `ccfleet status [-s S] [--json]` | each window, each `fleet/` branch, what is unmerged |
+| `ccfleet board add --title T [--brief B] [--files F] [--dep ID] [--role R]` | put a task on the board |
+| `ccfleet board next --as MEMBER [--wait S]` | claim the next task for a member; **blocks** |
+| `ccfleet board done ID` / `accept ID` / `reject ID --why W` / `block ID --why W` | report on one |
+| `ccfleet board list [--json]` | every task and its state |
 | `ccfleet down [-s S] [--force] [--dry-run]` | kill the fleet; keep every worktree that still holds work |
 
 ### Argument order
@@ -409,6 +414,90 @@ teardown.
 went with them — but still never deletes an unmerged branch: commits survive a
 forced teardown. `--dry-run` decides without doing.
 
+### A goal, split once, worked until it is done
+
+`-w`/`-c` build the room; `--goal` makes it run. With a goal, `ccfleet` writes a
+**shared task board** beside the worktrees and starts every member inside a
+claim loop, instead of leaving them bare to be briefed by hand:
+
+```bash
+ccfleet up -g "Add the three missing JSON contracts" \
+    --gates "python3 contracts/validate_examples.py" \
+    -w work:db -w codex:design -c personal:review
+```
+
+The orchestrator's only job is then decomposition — one `board add` per
+independent unit of work, each naming the files it owns:
+
+```bash
+ccfleet board add --title "contract: loop.json" --files "contracts/loop.schema.json" \
+    --brief "Write the schema and register it in NAMES."
+ccfleet board add --title "wire both in" --dep t1 --dep t2 --files "contracts/validate_examples.py"
+```
+
+Every member runs the same three lines forever, and that is the whole protocol:
+
+```bash
+ccfleet board next --as worker-db --wait 240   # blocks until there is work
+# ...do exactly that task...
+ccfleet board done t3 --as worker-db --note "..."
+```
+
+```console
+$ ccfleet board list
+goal  Add the three missing JSON contracts
+ID  STATE     ROLE     OWNER          DEPS   TITLE
+t1  accepted  worker   worker-design  -      contract: loop.json
+t2  claimed   worker   worker-db      -      contract: case_run.json
+t3  pending   worker   -              t1,t2  wire both in
+t4  pending   checker  -              -      review: contract: case_run.json
+```
+
+**Pull, not push — which is the only reason this works across platforms.**
+Pushing work into an agent means typing into its terminal and hoping the
+keystrokes landed. Pulling means the agent runs a command, and running commands
+is the one capability claude, codex and anything else all share. Nothing is
+injected into anyone's context; there is no daemon, and no dispatcher to lose
+track of who is idle.
+
+**`next` blocking is what removes the dispatcher.** An idle member is a member
+sitting inside a shell call, not one that has to be found and woken. It exits
+`4` when the wait elapsed with nothing claimable — call it again — and `5` only
+when the board is drained: nothing left *and* nobody still working. A member
+that stopped on `4` would never come back for the work the busy member is about
+to unblock, so that distinction is the loop.
+
+**A checker turns "done" into "agreed".** With a checker in the fleet, a
+finished task goes to `review` and a review task appears; the checker
+`accept`s it, or `reject`s it with a reason. A rejection puts the work back on
+the board as `pending` — deliberately unassigned, since the member that did it
+may be out of budget or gone — carrying the reason in the task, where the next
+attempt reads it. Every attempt gets its own review.
+
+**Blocking cascades.** `block` marks everything transitively waiting on that
+task blocked too. Without it a stranded task stays `pending` for ever, the
+board never drains, and every member spins on "nothing yet" — a full task list
+that is actually a deadlock. Work already claimed or finished is left alone: it
+is in a member's hands and will report.
+
+Every mutation takes an exclusive lock and rewrites the file atomically, so two
+members reaching `next` in the same instant get different tasks. That is the
+normal case, not the edge case.
+
+### Compared with Claude Code's agent teams
+
+Claude Code has [agent teams](https://code.claude.com/docs/en/agent-teams):
+a lead, a shared task list with dependencies, teammates that claim work and
+message each other automatically. If you are on one account and only running
+Claude, use that — it is better integrated than this will ever be, and the
+messaging is real rather than a file.
+
+This exists for the case it does not cover. Teammates are spawned by the lead
+process and run on the lead's credentials: the cost lands on one account, and
+nothing outside Claude Code can join. A `ccfleet` member is an ordinary CLI
+launched through `cca`/`cxa`, so a fleet can span four Claude accounts and a
+Codex one, and the board is a JSON file any of them can read.
+
 ### The orchestrator's half
 
 The launcher is only the infrastructure. The protocol lives in
@@ -510,7 +599,8 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 ```bash
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
-python3 ~/.local/share/cc-accounts/test_fleet.py    # 72 tests
+python3 ~/.local/share/cc-accounts/test_fleet.py    # 84 tests
+python3 ~/.local/share/cc-accounts/test_board.py    # 31 tests
 ```
 
 Hermetic, both of them. `test_cca.py` runs against a temporary `CCA_HOME`
