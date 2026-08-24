@@ -150,10 +150,13 @@ Reply with exactly these four sections, short:
 Two rules for you when writing the task:
 
 - **One job per worker.** If two tasks touch the same file, they are one task.
-- **State the gates by name if you know them.** Example, for this pipeline
-  repo: `python3 scripts/agent_lint.py` plus the test files of every package
-  touched (`python3 helpers/<pkg>/tests/test_*.py` — there is no pytest, and
-  each file is run directly).
+- **State the gates by name, not by category.** "Run the tests" is a guess the
+  worker has to make; `python3 scripts/lint.py` and `python3
+  pkg/tests/test_thing.py` are instructions. Read the repo's own AGENTS.md /
+  CONTRIBUTING once yourself and put the literal commands in every brief —
+  including the ones that are unusual there (a repo with no pytest, where each
+  test file is run directly, is exactly where a worker invents its own runner
+  and reports a green that means nothing).
 
 ---
 
