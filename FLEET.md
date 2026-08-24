@@ -21,6 +21,27 @@ Workers are isolated by git worktree, so two of them editing the same file
 cannot collide — the collision surfaces later, at merge, where you resolve it.
 You are the only session that sees every branch.
 
+**You do not do the work yourself.** You have a checkout and you can edit it,
+so the temptation is real: a job you could just do is quicker to do than to
+brief. Brief it anyway. The fleet exists so the work lands on branches that can
+be reviewed, rejected and thrown away — an orchestrator that writes the code
+produces exactly what one plain session would have, after paying the launch
+cost for nothing, and leaves its output in the one tree nobody can throw away.
+
+The exception is a job that genuinely does not split: a single design decision,
+one judgement call, one small edit. Then **say so before you start** — "this
+doesn't fan out, I'll do it here, the fleet is idle" — and let the human
+redirect you. Silently absorbing the job is the failure this rule exists to
+prevent, because from the outside it is indistinguishable from a fleet that is
+working, right up until someone looks at the worker windows and finds them
+still on their opening screen.
+
+**Anything a worker must read has to be committed.** A worktree is a checkout
+of a commit: untracked files in your tree do not exist in theirs, and neither
+do your uncommitted edits. A design doc, a spec, a fixture you just wrote is
+invisible to every worker until it is committed and they have rebased onto it.
+Commit it, tell them the new base, and have them confirm the rebase.
+
 ---
 
 ## 1. Read the map before anything else
@@ -261,6 +282,8 @@ in the output; it is yours to delete.
 | your keystrokes vanished | wrong target, or the pane is not at a prompt; check `ccfleet status` |
 | the second half of a brief became its own message | a newline inside `send-keys -l` (§2) |
 | a worker edited the main checkout | your brief did not name the worktree as its only tree |
+| every worker still on its opening screen while you have an answer | **you absorbed the job.** Re-read the rule at the top, then brief it out |
+| a worker cannot find a file you just wrote | it is untracked or uncommitted, so it is not in that worktree's commit |
 | a worker reports a missing dependency or config file | §6 — its worktree has no untracked files at all |
 | `git worktree add` refused | that branch is checked out elsewhere; `ccfleet status` shows where |
 
@@ -274,9 +297,13 @@ account has left; re-brief on a window whose account still has headroom.
 ## 9. The shape of a good round
 
 1. `ccfleet status` — know who is up.
-2. Decompose the job into one independent task per worker.
-3. Write every brief to `<repo>-fleet/briefs/`, then send the one-liners.
-4. Poll. Collect the four-section reports.
-5. Brief a checker per finished branch.
-6. Merge clean branches one at a time, re-running the gates.
-7. Report to the human: what merged, what was kept back and why.
+2. **Decide whether the job splits at all.** If it does not, say so and stop —
+   do not quietly do it yourself (§ the rule at the top).
+3. Commit anything the workers need to read, and tell them the base.
+4. Decompose the job into one independent task per worker.
+5. Write every brief to `<repo>-fleet/briefs/<session>/`, then send the
+   one-liners.
+6. Poll. Collect the four-section reports.
+7. Brief a checker per finished branch.
+8. Merge clean branches one at a time, re-running the gates.
+9. Report to the human: what merged, what was kept back and why.
