@@ -105,6 +105,7 @@ window as if you were sitting at it:
 
 ```bash
 tmux send-keys -t '=fleet:worker-work' -l 'read ../briefs/worker-work.md and follow it'
+sleep 1                                   # let the TUI take the paste
 tmux send-keys -t '=fleet:worker-work' Enter
 ```
 
@@ -112,9 +113,16 @@ tmux send-keys -t '=fleet:worker-work' Enter
   containing `Enter` or `C-c` as words is safe.
 - The `=` prefix on the target is exact matching. Without it tmux matches by
   prefix and your keystrokes can land in a stranger's session.
-- Submit as a **separate** `send-keys … Enter`. Never put `\n` inside the `-l`
-  text: the TUI submits at the first newline and the rest of your brief is
-  typed into an empty prompt as a second message.
+- Submit as a **separate** `send-keys … Enter`, **after a pause**. Back to back,
+  the Enter overtakes the paste and lands in an empty composer: the text sits
+  there unsent, and the window looks exactly like a worker ignoring you.
+  Measured on a codex TUI — same call, no delay, nothing happened; the same
+  Enter a moment later ran it. A second is enough; a long brief may want two.
+- Submitting is not delivery. **Verify**: capture the pane and check the
+  composer went empty (or that the agent is working). If your text is still
+  sitting in the box, send `Enter` again rather than retyping the brief.
+- Never put `\n` inside the `-l` text: the TUI submits at the first newline and
+  the rest of your brief is typed into an empty prompt as a second message.
 - **Therefore: never type a long brief.** Write it to a file and send one line
   pointing at it. That is the pattern below.
 
@@ -279,7 +287,8 @@ in the output; it is yours to delete.
 | a member never answers | it may be mid-turn — capture the pane before re-sending |
 | an **instant** answer, one line, no work | almost always an account limit. Read it: *"You've hit your monthly spend limit"* and *"5-hour limit reached"* both arrive in well under a second and look nothing like a report |
 | a member is missing from `ListAgents` | expected unless it shares your account space (§2). Not evidence of anything |
-| your keystrokes vanished | wrong target, or the pane is not at a prompt; check `ccfleet status` |
+| your text is in the composer, unsent | the `Enter` beat the paste — send `Enter` again, then pause before it next time |
+| your keystrokes vanished entirely | wrong target, or the pane is not at a prompt; check `ccfleet status` |
 | the second half of a brief became its own message | a newline inside `send-keys -l` (§2) |
 | a worker edited the main checkout | your brief did not name the worktree as its only tree |
 | every worker still on its opening screen while you have an answer | **you absorbed the job.** Re-read the rule at the top, then brief it out |
