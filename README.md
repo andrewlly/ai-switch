@@ -33,6 +33,8 @@ cca list             every account, both agents
 cca pick             choose one from a list, with live usage beside each
 cca usage            how much of each account's 5-hour and weekly limits is spent
 cca best --launch    start whichever account has the most left
+ccfleet up -w work -w codex -c client
+                     a tmux fleet: orchestrator, workers, checkers
 cca add <name>       a claude account   (cxa add <name> -> a codex one)
 cca login <name>
 cca status | doctor | which | default | tools
@@ -106,8 +108,11 @@ never flags it. Claude's `expiresAt` *is* a real expiry and is flagged.
 ~/.local/share/cc-accounts/cca.py     the tool (stdlib-only Python)
 ~/.local/share/cc-accounts/usage.py   rate-limit windows, live from the API
 ~/.local/share/cc-accounts/picker.py  the full-screen chooser
+~/.local/share/cc-accounts/fleet.py   ccfleet - a tmux fleet of sessions
+~/.local/share/cc-accounts/FLEET.md   the orchestrator's operating manual
 ~/.local/bin/cca -> cca.py            entry point for claude
 ~/.local/bin/cxa -> cca.py            entry point for codex
+~/.local/bin/ccfleet -> fleet.py      the fleet launcher
 ~/.local/bin/ccw, ccp, ccc, cxc …     one shortcut per account
 ~/.claude-accounts/accounts.json      the registry (v3)
 ~/.claude-accounts/usage-cache.json   last good usage, for when a probe fails
@@ -171,6 +176,9 @@ and `~/.codex` stay exactly where they are.
 | `cca env <name>` | print shell exports (`eval "$(cca env work)"`) |
 | `cca alias [name] [--set A] [--repair]` | show, set or rebuild the shortcuts |
 | `cca tools` | show what each entry point drives |
+| `ccfleet up [-s S] [-o A] [-w A[:L]]… [-c A[:L]]… [--repo D] [--base R] [--no-orch] [--dry-run]` | start a tmux fleet ([below](#a-fleet-of-sessions-ccfleet)) |
+| `ccfleet status [-s S] [--json]` | each window, each `fleet/` branch, what is unmerged |
+| `ccfleet down [-s S] [--force] [--dry-run]` | kill the fleet; keep every worktree that still holds work |
 
 ### Argument order
 
@@ -289,6 +297,144 @@ idea of which accounts exist — the registry is one file with one owner, and a
 reader that reimplements it is a reader that goes stale the day an account is
 added.
 
+## A fleet of sessions: `ccfleet`
+
+Several accounts means several agents can work at once — but not in one
+session's context. `ccfleet` starts a **tmux fleet** of separate CLI processes:
+one orchestrator, N workers each on their own git worktree and branch, N
+checkers reviewing what the workers produced.
+
+```bash
+ccfleet up -w work -w codex -c client   # 2 workers (one claude, one codex), 1 checker
+ccfleet status                          # what each window and each branch is doing
+ccfleet down                            # kill it, keeping anything unmerged
+```
+
+| | where it works | what it does |
+|---|---|---|
+| **orch** | the main checkout | decomposes, briefs, collects, merges |
+| **worker** | its own worktree, on `fleet/worker-<label>` | writes code |
+| **checker** | the main checkout, reading a worker's tree | reviews; never edits |
+
+The shape is per launch, not a fixed default: any account can take any role,
+the same account can appear more than once, and `-o` (or the account you are
+already on) decides who orchestrates.
+
+```bash
+ccfleet up -w work:parse -w work:report -o personal
+    # one account, two workers; the label after ':' names the window,
+    # the branch and the worktree, so a repeat is never a collision
+
+ccfleet up -w work --no-orch
+    # no orch window - you are the orchestrator, from the session you typed this in
+```
+
+### Why through `cca`
+
+Every window is launched as `cca <account>` or `cxa <account>`, never as a bare
+`claude`. A tmux pane inherits the **tmux server's** environment — whatever it
+had whenever it was first started, which is not necessarily this shell's — so a
+hand-rolled fleet reads whichever config directory that server happened to
+carry and quietly puts two windows on one account. Launching through the
+account manager makes each window's environment its own account's business.
+
+### Isolation is a worktree, not a convention
+
+Each worker gets `git worktree add -b fleet/worker-<label> <repo>-fleet/worker-<label> <base>`,
+so two workers editing the same file cannot collide — the collision surfaces
+once, at merge, in front of the one session that can see both branches. The
+worktrees live in a sibling directory (`<repo>-fleet/`) rather than inside the
+repository, because a repository with its own clones inside it confuses every
+tool that walks it, including git.
+
+Every worker branches from a **commit**, so uncommitted work in the main
+checkout is not in any of them. `ccfleet up` says so when the checkout is dirty
+rather than letting it be discovered later.
+
+### Nothing is declared
+
+There is no fleet state file. `status` and `down` ask tmux for the windows, git
+for the branches and worktrees, and tmux again for who is sitting in each one —
+which means they are right about a fleet started from another shell, and cannot
+go stale about one that died.
+
+```console
+$ ccfleet status
+fleet fleet   repo ~/src/thing   base 4a91c02 (main)
+#  WINDOW          RUNNING       PID     CWD
+0  orch            claude        214431  ~/src/thing
+1  worker-work     claude        214502  ~/src/thing-fleet/worker-work
+2  checker-client  dead (exit 1) 214560  ~/src/thing
+
+BRANCH             STATE  AHEAD  MERGED  WORKTREE
+fleet/worker-work  dirty  3      no      ~/src/thing-fleet/worker-work
+```
+
+`RUNNING` names the agent because each member is launched as **argv**, not as a
+shell string: hand tmux one string and it inserts `sh -c`, the pane's
+foreground process group belongs to that shell, and every window reports as
+`bash` however healthy it is. Which is exactly what the first version of this
+did — and the first orchestrator launched with it noticed, from inside the
+fleet, that the column was lying about all three windows including itself.
+
+A window that outlives its agent is tmux's own `remain-on-exit`, set **before**
+the agent is spawned. That ordering is the point: an account that dies on
+startup exits in milliseconds, and a window created without the option first
+would be destroyed with the error still in it. Instead the pane goes
+`dead (exit N)` and keeps its last screen; `tmux respawn-pane -k` puts a member
+back.
+
+### Teardown never destroys work
+
+`down` kills the session, then removes **only** worktrees that are clean,
+merged into the base, and empty of any live window. Everything else is kept and
+named with the reason:
+
+```console
+$ ccfleet down
+kept
+  fleet/worker-report   ~/src/thing-fleet/worker-report   not merged (3 commits)
+  fleet/worker-parse    ~/src/thing-fleet/worker-parse    uncommitted changes
+  fleet/worker-api      ~/src/thing-fleet/worker-api      in use by other:worker-api
+```
+
+That third reason is why occupancy is read from tmux rather than from a fleet's
+own records. `down -s A` acts on one tmux session but on *every* `fleet/`
+worktree in the repository, so a second fleet on the same repo — or a shell you
+left in a worktree — would otherwise have the ground taken out from under it.
+The check runs after the session is killed, so a fleet never blocks its own
+teardown.
+
+`--force` drops those worktrees anyway — and says which uncommitted changes
+went with them — but still never deletes an unmerged branch: commits survive a
+forced teardown. `--dry-run` decides without doing.
+
+### The orchestrator's half
+
+The launcher is only the infrastructure. The protocol lives in
+[`FLEET.md`](FLEET.md), which the orchestrator is pointed at by a kickoff brief
+written to `<repo>-fleet/briefs/<session>/orch.md`. It is written for the agent, not for
+you, and covers the part that is genuinely awkward: **there is no guaranteed
+messaging channel between CLI sessions.** Peers sometimes appear to each other
+and can be messaged directly; sometimes they do not, and Codex sessions never
+do. So the manual specifies two channels — the peer channel when a member shows
+up, and `tmux send-keys` / `capture-pane` as the fallback that always works —
+plus the brief-file pattern that makes the tmux channel reliable (a newline
+inside `send-keys` submits, so a long brief goes in a file and a one-line
+message points at it).
+
+What "sometimes they do not" turned out to mean, measured on a three-account
+fleet: a session sees only peers **in its own account space**. The
+orchestrator's own account was visible to it; the two members on other accounts
+were running and idle and never appeared, and neither did other long-lived
+sessions on those accounts. Which is the right answer for a tool whose whole
+job is keeping account spaces apart — and it makes the tmux channel the primary
+one for any fleet that spans accounts, not the fallback.
+
+Workers and checkers start **bare**, with no prompt at all. They know nothing
+about the fleet until the orchestrator tells them, which is why the manual's
+brief template is the length it is.
+
 ## Adding accounts
 
 The entry you use decides the agent — no flag needed:
@@ -364,6 +510,7 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 ```bash
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
+python3 ~/.local/share/cc-accounts/test_fleet.py    # 72 tests
 ```
 
 Hermetic, both of them. `test_cca.py` runs against a temporary `CCA_HOME`
@@ -375,3 +522,10 @@ by accident: that every picker line is exactly the terminal width at every
 width from 40 to 132 columns, and that `fmt_duration` never returns a seventh
 character (which is how a row once pushed the frame's right edge off the
 screen).
+
+`test_fleet.py` starts no tmux server and launches no agent: `--dry-run` is the
+seam, and the assertions are on the exact `git` and `tmux` argv a mixed
+claude+codex fleet would run. The git half is real — a throwaway repository per
+case, with `GIT_CONFIG_GLOBAL` pointed at `/dev/null` so your own git config
+cannot reach into a fixture — because the thing worth testing is the teardown
+decision, and "clean and merged" is a question only git can answer.
