@@ -604,6 +604,24 @@ class TestOccupancy(Base):
         self.down()
         self.assertFalse(path.exists())
 
+    def test_a_dry_run_predicts_what_the_real_teardown_does(self):
+        """The kill is `down`'s first act, so a dry run that still counted its
+        own windows would predict the opposite of the real thing."""
+        branch, path = self.add_worker_tree("done")
+        self.with_panes([("fleet:worker-done", str(path))])
+        _, dry = self.down(dry_run=True)
+        self.assertIn("clean and merged", dry)
+        self.assertNotIn("in use", dry)
+        _, real = self.down()
+        self.assertFalse(path.exists())
+        self.assertIn("clean and merged", real)
+
+    def test_another_fleet_in_the_same_worktree_still_blocks_it(self):
+        branch, path = self.add_worker_tree("done")
+        self.with_panes([("elsewhere:worker-done", str(path))])
+        _, dry = self.down(dry_run=True)
+        self.assertIn("in use by elsewhere:worker-done", dry)
+
 
 class TestStatus(Base):
     def status(self, as_json=False):

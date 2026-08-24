@@ -644,10 +644,22 @@ def print_map(session: str, repo: Path, base_label: str, fleet_dir: Path,
 # status
 # --------------------------------------------------------------------------
 
-def branch_states(repo: Path, base: str) -> list[dict]:
-    """Every fleet branch and worktree, with what removing it would cost."""
+def branch_states(repo: Path, base: str,
+                  ignore_session: str | None = None) -> list[dict]:
+    """Every fleet branch and worktree, with what removing it would cost.
+
+    `ignore_session` drops one session's own windows from the occupancy count.
+    `down` passes the session it is tearing down: in a real run those panes are
+    already dead by the time this is read, and a --dry-run that did not do the
+    same would report every one of its own worktrees as in use and predict the
+    opposite of what the real command does.
+    """
     by_branch = {w["branch"]: w for w in fleet_worktrees(repo)}
     users = panes_under([w["path"] for w in by_branch.values()])
+    if ignore_session:
+        mine = ignore_session + ":"
+        users = {path: [w for w in where if not w.startswith(mine)]
+                 for path, where in users.items()}
     rows = []
     for branch in sorted(set(fleet_branches(repo)) | set(by_branch)):
         wt = by_branch.get(branch)
@@ -777,9 +789,9 @@ def cmd_down(args) -> int:
     else:
         print(f"{c.dim}no tmux session {args.session!r} to kill{c.reset}")
 
-    # After the kill, so this fleet's own windows do not count as occupancy -
-    # only somebody else's do.
-    rows = branch_states(repo, base_sha)
+    # This fleet's own windows never count as occupancy: the kill above already
+    # ended them, and under --dry-run it would have.
+    rows = branch_states(repo, base_sha, ignore_session=args.session)
     removed, kept = [], []
     for row in rows:
         ok, why = removal_decision(row, args.force)
