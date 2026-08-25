@@ -425,6 +425,17 @@ against it:
 ccfleet up -w work:db -w codex:design -c personal:review
 ```
 
+**Your prompt stays your prompt.** The rules a member works by are handed to
+`claude` as `--append-system-prompt-file`, so they govern every turn without
+being wrapped around anything you type. Give the orchestrator the goal in your
+own words — at launch with `-g`, or typed into its window afterwards — and it
+arrives verbatim, with the decomposition rules already standing behind it. A
+brief delivered as a *first message* instead is one turn of context competing
+with everything after it, which is how an orchestrator briefed that way came to
+read its brief and then do the whole job itself. Codex has no equivalent flag,
+so its members get the same file as an opening message; that asymmetry is
+deliberate.
+
 `--goal` is optional and only records text on the board — you can just as well
 tell the orchestrator once it is up, which is the normal way to work. Pass it
 when you want the fleet to start decomposing without you. `--gates` is
@@ -621,7 +632,7 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 ```bash
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
-python3 ~/.local/share/cc-accounts/test_fleet.py    # 86 tests
+python3 ~/.local/share/cc-accounts/test_fleet.py    # 89 tests
 python3 ~/.local/share/cc-accounts/test_board.py    # 36 tests
 ```
 

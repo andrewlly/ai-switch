@@ -390,12 +390,16 @@ class TestDryRunSequence(Base):
         self.assertEqual(self.spawn_of("checker-client")[-2:],
                          [str(self.bin / "cca"), "client"])
 
-    def test_the_orchestrator_is_launched_with_one_line_pointing_at_its_brief(self):
+    def test_the_orchestrator_gets_its_brief_and_a_one_line_opening(self):
         argv = self.spawn_of("orch")
-        launcher, account, prompt = argv[-3:]
-        self.assertEqual([launcher, account], [str(self.bin / "cca"), "work"])
+        self.assertEqual(argv[argv.index("-c") + 2: argv.index("-c") + 4],
+                         [str(self.bin / "cca"), "work"])
+        self.assertEqual(argv[argv.index("--append-system-prompt-file") + 1],
+                         str(self.fleet_dir / "briefs" / "fleet" / "orch.md"))
+        prompt = argv[-1]
         self.assertEqual(prompt.splitlines(), [prompt])       # one line, always
-        self.assertIn(str(self.fleet_dir / "briefs" / "fleet" / "orch.md"), prompt)
+        self.assertIn("wait for the job", prompt)
+        self.assertNotIn("board", prompt)          # there is no board here
 
     def test_the_brief_is_the_only_file_ccfleet_writes(self):
         self.assertEqual(self.writes(self.out),
@@ -428,6 +432,12 @@ class TestOrchestratorChoice(Base):
     def first_spawn(cmds):
         return next(c for c in cmds if c[1:2] == ["respawn-pane"])
 
+    @staticmethod
+    def launched_as(cmd):
+        """(launcher, account) - the two arguments after the pane's cwd."""
+        at = cmd.index("-c") + 2
+        return cmd[at:at + 2]
+
     def test_no_orch_promotes_the_first_member_to_the_new_session(self):
         _, out = self.up(workers=["work"], checkers=["client"], no_orch=True,
                          no_board=True)
@@ -439,21 +449,21 @@ class TestOrchestratorChoice(Base):
         self.refuses("contradict", workers=["work"], orch="client", no_orch=True)
 
     def test_any_account_can_orchestrate_including_a_codex_one(self):
-        _, out = self.up(workers=["work"], orch="cx")
+        _, out = self.up(workers=["work"], orch="cx", no_board=True)
         spawn = self.first_spawn(self.commands(out))
-        self.assertEqual(spawn[-3:-1], [str(self.bin / "cxa"), "cx"])
+        self.assertEqual(self.launched_as(spawn), [str(self.bin / "cxa"), "cx"])
 
     def test_without_o_it_falls_back_to_the_registry_default(self):
         saved = dict(os.environ)
         for key in ("CCA_ACCOUNT", "CLAUDE_CONFIG_DIR", "CODEX_HOME"):
             os.environ.pop(key, None)
         try:
-            _, out = self.up(workers=["work"], orch=None)
+            _, out = self.up(workers=["work"], orch=None, no_board=True)
         finally:
             os.environ.clear()
             os.environ.update(saved)
         spawn = self.first_spawn(self.commands(out))
-        self.assertEqual(spawn[-3:-1], [str(self.bin / "cca"), "work"])
+        self.assertEqual(self.launched_as(spawn), [str(self.bin / "cca"), "work"])
 
 
 class TestWorktreeReuse(Base):
@@ -626,23 +636,50 @@ class TestBoardMode(Base):
         data = json.loads((self.fleet_dir / "boards" / "fleet.json").read_text())
         self.assertFalse(data["auto_review"])
 
-    def test_every_member_starts_inside_its_loop_not_bare(self):
-        cmds = self.commands(self.out)
-        spawns = [c for c in cmds if c[1:2] == ["respawn-pane"]]
-        self.assertEqual(len(spawns), 4)
-        for cmd in spawns:
-            window = cmd[cmd.index("-t") + 1].split(":", 1)[1]
-            prompt = cmd[-1]
-            with self.subTest(window=window):
-                self.assertIn(str(self.briefs() / f"{window}.md"), prompt)
+    def spawns(self, out=None):
+        return {c[c.index("-t") + 1].split(":", 1)[1]: c
+                for c in self.commands(out or self.out)
+                if c[1:2] == ["respawn-pane"]}
 
-    def test_a_member_is_told_its_own_role_not_the_orchestrators(self):
-        spawns = {c[c.index("-t") + 1].split(":", 1)[1]: c[-1]
-                  for c in self.commands(self.out) if c[1:2] == ["respawn-pane"]}
-        self.assertIn("You are the orchestrator", spawns["orch"])
-        self.assertIn("You are a worker", spawns["worker-db"])
-        self.assertIn("You are a checker", spawns["checker-review"])
-        self.assertNotIn("orchestrator", spawns["worker-db"])
+    def test_every_member_gets_its_brief_as_a_standing_system_prompt(self):
+        """Not as a first message: a brief that arrives as one turn competes
+        with everything after it, and an orchestrator briefed that way has
+        already been watched reading it and then doing the job itself."""
+        spawned = self.spawns()
+        self.assertEqual(len(spawned), 4)
+        for window in ("orch", "worker-db", "checker-review"):   # claude members
+            cmd = spawned[window]
+            with self.subTest(window=window):
+                self.assertIn("--append-system-prompt-file", cmd)
+                self.assertEqual(cmd[cmd.index("--append-system-prompt-file") + 1],
+                                 str(self.briefs() / f"{window}.md"))
+
+    def test_a_codex_member_gets_the_same_file_as_a_first_message(self):
+        """codex has no system-prompt flag, so the brief arrives the only way
+        it can - and the asymmetry is deliberate, not an oversight."""
+        cmd = self.spawns()["worker-design"]
+        self.assertNotIn("--append-system-prompt-file", cmd)
+        self.assertIn(str(self.briefs() / "worker-design.md"), cmd[-1])
+        self.assertIn("standing brief", cmd[-1])
+
+    def test_the_humans_own_words_are_what_the_orchestrator_is_asked(self):
+        """The point of putting the rules in the system prompt: the goal
+        reaches the orchestrator as typed, with no fleet boilerplate wrapped
+        round it."""
+        goal = "Add the three missing JSON contracts. Split by file."
+        _, out = self.up(workers=["work:db"], goal=goal)
+        self.assertEqual(self.spawns(out)["orch"][-1], goal)
+
+    def test_with_no_goal_the_orchestrator_is_told_to_wait_for_one(self):
+        _, out = self.up(workers=["work:db"])
+        self.assertIn("wait for the goal", self.spawns(out)["orch"][-1])
+
+    def test_a_member_is_told_to_start_its_loop_not_to_orchestrate(self):
+        spawned = self.spawns()
+        for window in ("worker-db", "checker-review"):
+            with self.subTest(window=window):
+                self.assertIn("Start your loop now", spawned[window][-1])
+                self.assertNotIn("orchestrator", spawned[window][-1])
 
     def test_a_worker_brief_carries_the_loop_its_tree_and_the_gates(self):
         _, out = self.up(workers=["work:db"], goal="G",

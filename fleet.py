@@ -387,6 +387,11 @@ def launcher_for(acct) -> str:
         f"{acct.name!r}) is not installed in {tilde(cca.BIN_DIR)} or on PATH")
 
 
+# Claude reads a file of extra system-prompt text; codex has no equivalent, so
+# its members are pointed at the same file as an ordinary first message.
+SYSTEM_PROMPT_FLAG = {"claude": "--append-system-prompt-file"}
+
+
 def member_argv(member: dict) -> list[str]:
     """How a member is launched: separate arguments, never a shell string.
 
@@ -396,8 +401,18 @@ def member_argv(member: dict) -> list[str]:
     however healthy it is - the pane's foreground process group belongs to that
     shell, not to its child. (It also means a prompt needs no quoting at all.)
     """
+    argv = [member["launcher"], member["account"]]
+    brief, flag = member.get("brief"), SYSTEM_PROMPT_FLAG.get(member.get("tool"))
+    if brief and flag:
+        # The rules belong in the system prompt, not in what the human types.
+        # A brief delivered as a first message is one turn of context that has
+        # to compete with everything after it - and this repo has already
+        # watched an orchestrator, briefed exactly that way, read its brief and
+        # then do the whole job itself. In the system prompt they govern every
+        # turn, including a goal typed in hours later.
+        argv += [flag, str(brief)]
     prompt = member.get("prompt")
-    return [member["launcher"], member["account"]] + ([prompt] if prompt else [])
+    return argv + ([prompt] if prompt else [])
 
 
 def spawn(do: "Doer", exe: str, session: str, member: dict, cwd: Path,
@@ -518,7 +533,12 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
             "report; a checker accepts or rejects; a rejected task goes back "
             "on the board with the reason and is picked up again. None of that "
             "needs you.",
-            f"5. **When every task is on the board, `{cmd} close`.** Until "
+            "**Rounds are expected.** You do not have to see the whole "
+            "decomposition up front. Add the round you can see now, leave the "
+            "board open, and add the next round once the first is accepted - "
+            "what a review turns up is often what the next task should be. "
+            "The board being open is what keeps every member waiting for it.",
+            f"5. **Only when the goal itself is met, `{cmd} close`.** Until "
             f"you do, a member that runs out of work waits instead of "
             f"stopping - which is deliberate, because decomposition is "
             f"several `add` calls and a fast member would otherwise finish "
@@ -566,19 +586,30 @@ def board_cmd(session: str) -> str:
     return "ccfleet board" + ("" if session == DEFAULT_SESSION else f" -s {session}")
 
 
-def kickoff_prompt(brief: Path, role: str = "orch") -> str:
-    """One line, because it is the argv a window is launched with.
+def first_message(member: dict, goal: str = "", use_board: bool = True) -> str:
+    """What a member is launched with, once its rules are already in place.
 
-    Role-aware: the same sentence for every member would tell three of them
-    they are the orchestrator, and an agent told that acts like one.
+    Where the rules ride in the system prompt this is short on purpose: the
+    session already knows what it is, so the opening message is the work
+    itself. Where they cannot (codex, which has no equivalent flag) the same
+    file is handed over as a first message instead.
     """
+    brief, role = member.get("brief"), member["role"]
+    if brief and not SYSTEM_PROMPT_FLAG.get(member.get("tool")):
+        return (f"You are the {role} of a ccfleet. Read {brief} in full - it is "
+                f"your standing brief, it contains the loop you run, and it "
+                f"governs everything you do in this session. Follow it now."
+                + (f"\n\nThe goal: {goal}" if goal and role == "orch" else ""))
     if role == "orch":
-        return (f"You are the orchestrator of a ccfleet. Read {brief} - it is "
-                f"your kickoff brief, and it names the operating manual you "
-                f"work from. Follow it.")
-    return (f"You are a {role} in a ccfleet. Read {brief} - it is your brief, "
-            f"and it contains the loop you are to run. Start that loop now, "
-            f"and stay in it until the board tells you it is drained.")
+        if goal:
+            return goal
+        return ("The fleet is up and every member is waiting on the board. "
+                "Confirm the map back to me, then wait for the goal."
+                if use_board else
+                "The fleet is up. Confirm the map back to me, including which "
+                "members you can reach on which channel, and wait for the job.")
+    return ("Start your loop now: claim your first task from the board and "
+            "keep going until it tells you the board is drained.")
 
 
 # --------------------------------------------------------------------------
@@ -820,12 +851,12 @@ def cmd_up(args) -> int:
 
     exe = tmux_bin()
     if orch:
-        orch["prompt"] = kickoff_prompt(orch["brief"])
+        orch["prompt"] = first_message(orch, goal, use_board)
     # Without a goal, members start bare and wait to be briefed by hand. With
     # one, every member starts inside its loop - which is the whole difference.
     for m in members:
         if m.get("brief"):
-            m["prompt"] = kickoff_prompt(m["brief"], m["role"])
+            m["prompt"] = first_message(m, goal, use_board)
     for n, m in enumerate(all_members):
         cwd = m["worktree"] if m["role"] == "worker" else repo
         spawn(do, exe, session, m, cwd, first=(n == 0))
