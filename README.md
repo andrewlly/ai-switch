@@ -182,6 +182,7 @@ and `~/.codex` stay exactly where they are.
 | `ccfleet board add --title T [--brief B] [--files F] [--dep ID] [--role R]` | put a task on the board |
 | `ccfleet board next --as MEMBER [--wait S]` | claim the next task for a member; **blocks** |
 | `ccfleet board done ID` / `accept ID` / `reject ID --why W` / `block ID --why W` | report on one |
+| `ccfleet board close` / `reopen` | decomposition finished — the only thing that lets members stop |
 | `ccfleet board list [--json]` | every task and its state |
 | `ccfleet down [-s S] [--force] [--dry-run]` | kill the fleet; keep every worktree that still holds work |
 
@@ -416,9 +417,21 @@ forced teardown. `--dry-run` decides without doing.
 
 ### A goal, split once, worked until it is done
 
-`-w`/`-c` build the room; `--goal` makes it run. With a goal, `ccfleet` writes a
-**shared task board** beside the worktrees and starts every member inside a
-claim loop, instead of leaving them bare to be briefed by hand:
+The topology flags are the whole required surface. `up` writes a **shared task
+board** beside the worktrees and starts every member inside a claim loop
+against it:
+
+```bash
+ccfleet up -w work:db -w codex:design -c personal:review
+```
+
+`--goal` is optional and only records text on the board — you can just as well
+tell the orchestrator once it is up, which is the normal way to work. Pass it
+when you want the fleet to start decomposing without you. `--gates` is
+optional too: it names the literal commands every member must pass before
+reporting a task done, and exists only because a member left to guess picks its
+own and reports a green that means nothing. `--no-board` turns all of it off
+and goes back to bare members you brief by hand.
 
 ```bash
 ccfleet up -g "Add the three missing JSON contracts" \
@@ -466,6 +479,15 @@ sitting inside a shell call, not one that has to be found and woken. It exits
 when the board is drained: nothing left *and* nobody still working. A member
 that stopped on `4` would never come back for the work the busy member is about
 to unblock, so that distinction is the loop.
+
+**An open board is never drained, and that is not a detail.** A member stops
+only when the board is *closed* — the orchestrator saying decomposition is
+finished — and there is nothing outstanding. Without that rule every member
+launches, finds an empty board, is told there is no work left, and goes home
+before the orchestrator has written its first task; and a fast member clears
+the first task and quits between two `add` calls. So until `board close`, a
+member with nothing to do waits. A member waiting too long is visible in
+`list`; a member that stopped early is a fleet that quietly did nothing.
 
 **A checker turns "done" into "agreed".** With a checker in the fleet, a
 finished task goes to `review` and a review task appears; the checker
@@ -599,8 +621,8 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 ```bash
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
-python3 ~/.local/share/cc-accounts/test_fleet.py    # 84 tests
-python3 ~/.local/share/cc-accounts/test_board.py    # 31 tests
+python3 ~/.local/share/cc-accounts/test_fleet.py    # 86 tests
+python3 ~/.local/share/cc-accounts/test_board.py    # 36 tests
 ```
 
 Hermetic, both of them. `test_cca.py` runs against a temporary `CCA_HOME`

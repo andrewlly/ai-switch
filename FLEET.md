@@ -69,6 +69,11 @@ ccfleet board list          # watch; poll this, not the panes
 - **Then stop and watch.** Members claim, work and report; a checker accepts or
   rejects; a rejected task goes back on the board carrying the reason and is
   picked up again. None of that needs you.
+- **`ccfleet board close` when every task is on the board.** This is the only
+  thing that lets a member stop. Until you call it, a member with nothing to do
+  waits — deliberately, because decomposition is several `add` calls and a fast
+  member would otherwise clear the board between two of them and go home. If
+  more work turns up later, `reopen`.
 - **Merge what is `accepted`,** one branch at a time, re-running the gates.
 
 You still do not do the work. A task you `add` and then do yourself is the same
@@ -326,6 +331,7 @@ in the output; it is yours to delete.
 | every worker still on its opening screen while you have an answer | **you absorbed the job.** Re-read the rule at the top, then brief it out |
 | a worker cannot find a file you just wrote | it is untracked or uncommitted, so it is not in that worktree's commit |
 | the board has pending tasks and every member is idle | their dependencies are blocked. `block` cascades, so check for a `blocked` task upstream |
+| every task is accepted but nobody has stopped | you never ran `board close` |
 | a task keeps coming back rejected | the brief is underspecified, not the worker. Rewrite it with the acceptance test in it |
 | a worker reports a missing dependency or config file | §6 — its worktree has no untracked files at all |
 | `git worktree add` refused | that branch is checked out elsewhere; `ccfleet status` shows where |

@@ -93,6 +93,7 @@ class TestClaiming(Base):
         self.bd.block("t1", "needs a decision")
         self.assertEqual(self.states(), {"t1": "blocked", "t2": "blocked"})
         self.assertIn("depends on t1", self.bd.read()["tasks"][1]["notes"][0])
+        self.bd.close()
         self.assertEqual(self.bd.claim("worker-b")[0], board.DRAINED)
 
     def test_a_task_someone_is_working_on_is_not_cascaded(self):
@@ -127,8 +128,38 @@ class TestClaiming(Base):
 
 
 class TestDrained(Base):
-    def test_an_empty_board_is_drained(self):
+    """4 means wait, 5 means stop. Getting this wrong empties a fleet."""
+
+    def test_an_open_board_is_never_drained_however_empty(self):
+        """The bug this rule exists for: every member launches before the
+        orchestrator has written a task, and being told `drained` there sent
+        all of them home before the fleet had done anything."""
+        self.assertEqual(self.bd.claim("worker-db"), (board.NO_TASK_YET, None))
+
+    def test_an_empty_board_is_drained_once_it_is_closed(self):
+        self.bd.close()
         self.assertEqual(self.bd.claim("worker-db"), (board.DRAINED, None))
+
+    def test_finishing_the_only_task_on_an_open_board_is_not_the_end(self):
+        """Decomposition is several `add` calls, not one. A fast member that
+        cleared the first task must not go home between two of them."""
+        self.bd.add("first")
+        self.bd.claim("worker-a")
+        self.bd.done("t1")
+        self.assertEqual(self.bd.claim("worker-a")[0], board.NO_TASK_YET)
+        self.bd.close()
+        self.assertEqual(self.bd.claim("worker-a")[0], board.DRAINED)
+
+    def test_reopening_puts_members_back_to_waiting(self):
+        self.bd.close()
+        self.assertEqual(self.bd.claim("worker-a")[0], board.DRAINED)
+        self.bd.reopen()
+        self.assertEqual(self.bd.claim("worker-a")[0], board.NO_TASK_YET)
+
+    def test_closing_a_board_with_work_left_on_it_does_not_drain_it(self):
+        self.bd.add("first")
+        self.bd.close()
+        self.assertEqual(self.bd.claim("worker-a")[0], board.GOT_TASK)
 
     def test_someone_still_working_means_not_drained(self):
         """The distinction the whole loop rests on: 4 means wait, 5 means stop,
@@ -146,11 +177,12 @@ class TestDrained(Base):
         bd.done("t1")
         self.assertEqual(bd.claim("worker-b")[0], board.NO_TASK_YET)
 
-    def test_everything_terminal_is_drained(self):
+    def test_everything_terminal_on_a_closed_board_is_drained(self):
         self.bd.add("first")
         self.bd.claim("worker-a")
         self.bd.done("t1")
         self.bd.accept("t1")
+        self.bd.close()
         self.assertEqual(self.bd.claim("worker-a")[0], board.DRAINED)
 
 
@@ -250,6 +282,7 @@ class TestWaiting(Base):
 
     def test_it_stops_at_once_when_the_board_is_drained(self):
         now, clock, sleep = self.fake_clock()
+        self.bd.close()
         code, _ = self.bd.wait_claim("worker-db", 600, sleep=sleep, clock=clock)
         self.assertEqual(code, board.DRAINED)
         self.assertEqual(now[0], 0.0)
@@ -335,7 +368,12 @@ class TestSummary(Base):
         missing = board.Board(self.tmp / "nope" / "gone.json")
         self.assertFalse(missing.exists())
         self.assertEqual(missing.summary()["tasks"], [])
-        self.assertTrue(missing.summary()["drained"])
+        self.assertFalse(missing.summary()["drained"])   # open, not finished
+
+    def test_the_summary_says_whether_members_can_ever_stop(self):
+        self.assertFalse(self.bd.summary()["closed"])
+        self.bd.close()
+        self.assertTrue(self.bd.summary()["closed"])
 
 
 if __name__ == "__main__":

@@ -73,15 +73,18 @@ class Board:
     def exists(self) -> bool:
         return self.path.is_file()
 
-    def _blank(self, goal: str = "", auto_review: bool = False) -> dict:
+    def blank(self, goal: str = "", auto_review: bool = False) -> dict:
+        """An empty board. Public because `ccfleet up` writes the first one
+        through its own dry-run seam, and a second hand-written copy of this
+        shape is a field that goes missing the day one is added."""
         return {"version": VERSION, "goal": goal, "auto_review": auto_review,
-                "seq": 0, "tasks": []}
+                "closed": False, "seq": 0, "tasks": []}
 
     def read(self) -> dict:
         try:
             return json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
-            return self._blank()
+            return self.blank()
 
     def _write(self, data: dict) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -102,7 +105,7 @@ class Board:
         with open(lock, "a+") as fh:
             fcntl.flock(fh, fcntl.LOCK_EX)
             try:
-                data = self.read() if self.exists() else self._blank()
+                data = self.read() if self.exists() else self.blank()
                 result = fn(data)
                 self._write(data)
                 return result
@@ -112,7 +115,7 @@ class Board:
     # -- building --------------------------------------------------------
 
     def init(self, goal: str, auto_review: bool) -> dict:
-        data = self._blank(goal, auto_review)
+        data = self.blank(goal, auto_review)
         self._write(data)
         return data
 
@@ -164,12 +167,22 @@ class Board:
                 and all(dep in settled for dep in t["deps"])]
 
     def _drained(self, data: dict) -> bool:
-        """True when no further work can ever appear.
+        """True when no further work can ever appear - and only then.
 
-        A claimed task means somebody is still working, and what they do next
-        may create claimable work - so a board with one member busy is not
-        drained, however little else is left.
+        Two conditions, and the first is the one that is easy to forget. An
+        open board can still grow: decomposition is a series of `add` calls,
+        not one, so a board that looks empty may simply not have been filled
+        yet - which is exactly the state every member is in at launch. Calling
+        that drained told each of them to stop before the orchestrator had
+        written its first task. So a board is drained only once somebody has
+        said there will be no more tasks.
+
+        The second: a claimed task means somebody is still working, and what
+        they do next may unblock more, so a board with one member busy is not
+        drained however little else is left.
         """
+        if not data.get("closed"):
+            return False
         return not any(t["state"] in ("pending", "claimed", "review")
                        for t in data["tasks"])
 
@@ -311,6 +324,26 @@ class Board:
             return dict(task)
         return self.update(apply)
 
+    def close(self) -> dict:
+        """Declare decomposition finished: no more tasks are coming.
+
+        Until this is called every member waits rather than stopping, which is
+        the safe way round - a member that waits too long is visible in
+        `list`, a member that stopped early is a fleet that quietly did
+        nothing.
+        """
+        def apply(data):
+            data["closed"] = True
+            return {"closed": True, "drained": self._drained(data)}
+        return self.update(apply)
+
+    def reopen(self) -> dict:
+        """More work turned out to be needed. Members waiting stay waiting."""
+        def apply(data):
+            data["closed"] = False
+            return {"closed": False}
+        return self.update(apply)
+
     # -- reading ---------------------------------------------------------
 
     def summary(self) -> dict:
@@ -320,5 +353,6 @@ class Board:
             counts[task["state"]] = counts.get(task["state"], 0) + 1
         return {"goal": data.get("goal", ""),
                 "auto_review": bool(data.get("auto_review")),
+                "closed": bool(data.get("closed")),
                 "counts": counts, "drained": self._drained(data),
                 "tasks": data["tasks"]}

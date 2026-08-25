@@ -145,10 +145,11 @@ class Base(unittest.TestCase):
             self.output = buf.getvalue()
 
     def up(self, workers=None, checkers=None, orch="work", no_orch=False,
-           base=None, session="fleet", dry_run=True, goal=None, gates=None):
+           base=None, session="fleet", dry_run=True, goal=None, gates=None,
+           no_board=False):
         args = argparse.Namespace(
             session=session, repo=str(self.repo), base=base, goal=goal,
-            gates=gates,
+            gates=gates, no_board=no_board,
             worker=workers, checker=checkers, no_orch=no_orch,
             # The default here is a convenience, not the CLI's: --no-orch and
             # -o are refused together, so the helper drops the default.
@@ -288,7 +289,8 @@ class TestDryRunSequence(Base):
 
     def setUp(self):
         super().setUp()
-        _, self.out = self.up(workers=["work", "cx"], checkers=["client"])
+        _, self.out = self.up(workers=["work", "cx"], checkers=["client"],
+                              no_board=True)
         self.cmds = self.commands(self.out)
         self.tmux = [cmd for cmd in self.cmds if cmd[0] == "/usr/bin/tmux"]
 
@@ -427,7 +429,8 @@ class TestOrchestratorChoice(Base):
         return next(c for c in cmds if c[1:2] == ["respawn-pane"])
 
     def test_no_orch_promotes_the_first_member_to_the_new_session(self):
-        _, out = self.up(workers=["work"], checkers=["client"], no_orch=True)
+        _, out = self.up(workers=["work"], checkers=["client"], no_orch=True,
+                         no_board=True)
         cmds = self.commands(out)
         self.assertEqual(self.windows(cmds), ["worker-work", "checker-client"])
         self.assertEqual(self.writes(out), [])       # no orchestrator, no brief
@@ -675,8 +678,27 @@ class TestBoardMode(Base):
         text = (self.fleet_dir / "briefs" / "bt" / "worker-db.md").read_text()
         self.assertIn("ccfleet board -s bt next --as worker-db", text)
 
-    def test_without_a_goal_there_is_no_board_and_members_stay_bare(self):
-        _, out = self.up(workers=["work:db"], checkers=["client:review"])
+    def test_a_goal_is_optional_and_the_board_is_started_without_one(self):
+        """You do not have to know what the fleet is for to start it: the goal
+        is text on the board, and the orchestrator can be told later."""
+        _, out = self.up(workers=["work:db"], checkers=["client:review"],
+                         dry_run=False)
+        data = json.loads((self.fleet_dir / "boards" / "fleet.json").read_text())
+        self.assertEqual(data["goal"], "")
+        self.assertFalse(data["closed"])
+        text = (self.briefs() / "orch.md").read_text()
+        self.assertIn("Not given yet", text)
+        self.assertIn("wait for the goal", text)
+
+    def test_the_orchestrator_is_told_to_close_the_board_when_it_is_full(self):
+        _, out = self.up(workers=["work:db"], goal="G", dry_run=False)
+        text = (self.briefs() / "orch.md").read_text()
+        self.assertIn("ccfleet board close", text)
+        self.assertIn("waits instead of", text)
+
+    def test_no_board_leaves_members_bare_to_be_briefed_by_hand(self):
+        _, out = self.up(workers=["work:db"], checkers=["client:review"],
+                         no_board=True)
         self.assertEqual(self.writes(out),
                          [str(self.briefs() / "orch.md")])
         spawns = [c for c in self.commands(out) if c[1:2] == ["respawn-pane"]]

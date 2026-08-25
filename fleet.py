@@ -434,7 +434,8 @@ def briefs_dir(fleet_dir: Path, session: str) -> Path:
 
 
 def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
-                  members: list[dict], goal: str = "", gates: str = "") -> str:
+                  members: list[dict], goal: str = "", gates: str = "",
+                  use_board: bool = False) -> str:
     """The orchestrator's opening brief, written to disk rather than typed.
 
     It is a file for the same three reasons the orchestrator writes its own
@@ -481,14 +482,15 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
         f"- `ccfleet status --json` re-reads this map from tmux and git at any "
         f"time; it is current, this file is not.",
     ]
-    if goal:
+    if use_board:
         cmd = board_cmd(session)
+        lines += ["", "## The goal", ""]
+        lines += [f"> {goal}"] if goal else [
+            "**Not given yet.** The human will tell you. Until then, add "
+            "nothing to the board: every member is already waiting on it, and "
+            "they wait quietly.",
+        ]
         lines += [
-            "",
-            "## The goal",
-            "",
-            f"> {goal}",
-            "",
             "## How this fleet works - read this twice",
             "",
             "Every member is already running its own loop against a shared task "
@@ -516,7 +518,13 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
             "report; a checker accepts or rejects; a rejected task goes back "
             "on the board with the reason and is picked up again. None of that "
             "needs you.",
-            "5. **Merge what is accepted**, one branch at a time, re-running "
+            f"5. **When every task is on the board, `{cmd} close`.** Until "
+            f"you do, a member that runs out of work waits instead of "
+            f"stopping - which is deliberate, because decomposition is "
+            f"several `add` calls and a fast member would otherwise finish "
+            f"the board between two of them and go home. `close` is what "
+            f"lets them stop. If more work appears later, `{cmd} reopen`.",
+            "6. **Merge what is accepted**, one branch at a time, re-running "
             "the gates after each. Report to the human at the end.",
             "",
             "**You do not do the work yourself and you do not add a task you "
@@ -527,7 +535,9 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
             lines += ["", f"The gates every member must pass: `{gates}`"]
         lines += [
             "",
-            "Start now: decompose the goal and fill the board.",
+            ("Start now: decompose the goal and fill the board."
+             if goal else
+             "Report the map back to me and wait for the goal."),
             "",
         ]
     else:
@@ -772,22 +782,27 @@ def cmd_up(args) -> int:
 
     goal = (getattr(args, "goal", "") or "").strip()
     gates = (getattr(args, "gates", "") or "").strip()
+    # The board is how a fleet works on its own, so it is the default. The
+    # goal is just text on it: a fleet is perfectly startable before anyone
+    # has decided what it is for, and the orchestrator can be told later.
+    use_board = not getattr(args, "no_board", False)
     do = Doer(args.dry_run)
     briefs = briefs_dir(fleet_dir, session)
-    if goal:
+    if use_board:
         # A checker in the fleet is what turns "the worker says it is done"
         # into "a second session agreed" - so it is the board's review switch.
-        do.write(board_path(fleet_dir, session), json.dumps({
-            "version": board.VERSION, "goal": goal, "seq": 0, "tasks": [],
-            "auto_review": any(m["role"] == "checker" for m in members),
-        }, indent=2, sort_keys=True) + "\n", "task board")
+        path = board_path(fleet_dir, session)
+        blank = board.Board(path).blank(
+            goal, auto_review=any(m["role"] == "checker" for m in members))
+        do.write(path, json.dumps(blank, indent=2, sort_keys=True) + "\n",
+                 "task board")
     if orch:
         orch["brief"] = briefs / "orch.md"
         do.write(orch["brief"],
                  kickoff_brief(session, repo, base_label, fleet_dir, members,
-                               goal, gates),
+                               goal, gates, use_board),
                  "kickoff brief")
-    if goal:
+    if use_board:
         for m in members:
             m["brief"] = briefs / f"{m['window']}.md"
             do.write(m["brief"],
@@ -826,7 +841,7 @@ def cmd_up(args) -> int:
     info(f"fleet {session!r} is up")
     print(f"\n  attach:   tmux attach -t {session}")
     print(f"  a window: tmux attach -t {session}:{all_members[-1]['window']}")
-    if goal:
+    if use_board:
         print(f"\n  board:    {board_cmd(session)} list")
     if orch:
         print(f"\n{c.dim}The orch window was pointed at "
@@ -1111,9 +1126,26 @@ def cmd_board(args) -> int:
             print("The board is drained: nothing left to claim and nobody "
                   "still working. Your loop is over - report what you did.")
             return board.DRAINED
-        print(f"No task for {args.member} yet - work it depends on is still "
-              f"with someone else. Run this same command again.")
+        data = bd.summary()
+        why = ("the board has no tasks on it yet - the orchestrator is still "
+               "deciding how to split the goal" if not data["tasks"] else
+               "the work it depends on is still with someone else")
+        print(f"No task for {args.member} yet: {why}. This is not the end of "
+              f"your loop - run the same command again.")
         return board.NO_TASK_YET
+
+    if verb == "close":
+        state = bd.close()
+        info("board closed: no more tasks. Members will stop once the work on "
+             "it is finished." if not state["drained"] else
+             "board closed and already drained - every member will now stop.")
+        return 0
+
+    if verb == "reopen":
+        bd.reopen()
+        info("board reopened - members will wait for new tasks instead of "
+             "stopping")
+        return 0
 
     try:
         if verb == "done":
@@ -1164,7 +1196,12 @@ def print_board(bd: "board.Board", args) -> int:
         print(f"{tone.get(r['state'], '')}{line}{c.reset}")
     counts = "  ".join(f"{n} {state}" for state, n in data["counts"].items() if n)
     print(f"\n{counts}"
-          + (f"   {c.green}drained{c.reset}" if data["drained"] else ""))
+          + (f"   {c.green}drained{c.reset}" if data["drained"]
+             else f"   {c.dim}open{c.reset}" if not data["closed"] else ""))
+    if not data["closed"]:
+        print(f"{c.dim}The board is open: members wait rather than stop. "
+              f"`{board_cmd(args.session)} close` when every task is on it."
+              f"{c.reset}")
     return 0
 
 
@@ -1215,9 +1252,12 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--no-orch", action="store_true",
                    help="no orchestrator window - drive the fleet from here")
     s.add_argument("-g", "--goal", metavar="TEXT",
-                   help="what the fleet is for. Creates a shared task board "
-                        "and starts every member in its claim loop, instead of "
-                        "leaving them bare to be briefed by hand")
+                   help="what the fleet is for. Optional - it is only recorded "
+                        "on the board, and you can just as well tell the "
+                        "orchestrator once it is up")
+    s.add_argument("--no-board", action="store_true",
+                   help="no task board: members start bare and wait to be "
+                        "briefed by hand, one message at a time")
     s.add_argument("--gates", metavar="CMD",
                    help="the literal commands every member must pass before "
                         "reporting a task done")
@@ -1262,6 +1302,8 @@ def build_parser() -> argparse.ArgumentParser:
     b = bsub.add_parser("block", help="a task cannot be finished")
     b.add_argument("id")
     b.add_argument("--why", required=True)
+    b = bsub.add_parser("close", help="decomposition is finished; no more tasks")
+    b = bsub.add_parser("reopen", help="undo close: more tasks are coming")
     b = bsub.add_parser("list", help="every task and its state")
     b.add_argument("--json", action="store_true")
     for b in bsub.choices.values():
