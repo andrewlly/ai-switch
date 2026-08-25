@@ -727,6 +727,31 @@ class TestBoardMode(Base):
         self.assertIn("Not given yet", text)
         self.assertIn("wait for the goal", text)
 
+    def test_the_orchestrator_finds_the_gates_itself_when_not_told(self):
+        """You should not have to name them: they are written down in the repo,
+        and a fleet that can read code can read AGENTS.md."""
+        _, out = self.up(workers=["work:db"], goal="do something for me",
+                         dry_run=False)
+        text = (self.briefs() / "orch.md").read_text()
+        self.assertIn("Nobody told you what they are", text)
+        self.assertIn("AGENTS.md", text)
+        self.assertIn("Before you decompose anything", text)
+
+    def test_a_member_falls_back_to_the_repos_own_gates(self):
+        _, out = self.up(workers=["work:db"], goal="G", dry_run=False)
+        text = (self.briefs() / "worker-db.md").read_text()
+        self.assertIn("Your task names them", text)
+        self.assertIn("Never invent a test command", text)
+
+    def test_given_gates_are_passed_through_verbatim_to_both(self):
+        _, out = self.up(workers=["work:db"], goal="G",
+                         gates="python3 run_all.py", dry_run=False)
+        self.assertIn("python3 run_all.py",
+                      (self.briefs() / "worker-db.md").read_text())
+        orch = (self.briefs() / "orch.md").read_text()
+        self.assertIn("python3 run_all.py", orch)
+        self.assertNotIn("Nobody told you", orch)
+
     def test_the_orchestrator_is_told_to_close_the_board_when_it_is_full(self):
         _, out = self.up(workers=["work:db"], goal="G", dry_run=False)
         text = (self.briefs() / "orch.md").read_text()

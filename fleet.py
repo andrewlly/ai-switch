@@ -554,8 +554,27 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
             "then do.** If the goal turns out not to split, say so and stop - "
             "do not quietly absorb it.",
         ]
+        lines += ["", "### The gates"]
         if gates:
-            lines += ["", f"The gates every member must pass: `{gates}`"]
+            lines += ["", f"You were given them: `{gates}`. Put them in every "
+                          f"task brief verbatim."]
+        else:
+            lines += [
+                "",
+                "**Nobody told you what they are, and you are not to ask.** "
+                "They are written down in the repository - that is what "
+                "`AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING`, a `Makefile` or "
+                "`package.json` scripts are for. Before you decompose "
+                "anything: find them, and put the **literal commands** in "
+                "every task brief.",
+                "",
+                "Read them, do not infer them. A repository whose tests are "
+                "run file by file rather than through a runner, or that needs "
+                "a particular interpreter, will say so - and a member left to "
+                "guess picks its own and reports a green that means nothing. "
+                "If a project genuinely has no gate, say so in the brief so "
+                "the member does not go looking for one.",
+            ]
         lines += [
             "",
             ("Start now: decompose the goal and fill the board."
@@ -703,16 +722,21 @@ def loop_brief(member: dict, session: str, repo: Path, base_label: str,
         "   - exit 5: the board is drained. Report what you did and stop.",
         "2. Do the task.",
     ]
-    if gates:
-        body.append(f"3. Run the gates before reporting it done: {gates}")
+    body.append(
+        f"3. Run the gates before reporting it done: {gates}" if gates.strip()
+        else "3. Run the gates before reporting it done. Your task names them; "
+             "if it does not, read the repository's own `AGENTS.md` / "
+             "`CLAUDE.md` / `CONTRIBUTING` and run what those say. Never "
+             "invent a test command, and name the exact commands you ran in "
+             "your report.")
     report = (f"`{cmd} accept <id>` / `{cmd} reject <id> --why \"...\"`"
               if checker else
               f"`{cmd} done <id> --as {name} --note \"...\"`, or "
               f"`{cmd} block <id> --why \"...\"`")
     body += [
-        f"{'4' if gates else '3'}. Report it: {report}. Each task prints its "
-        f"own line with the id already filled in - use that.",
-        f"{'5' if gates else '4'}. Go back to step 1.",
+        f"4. Report it: {report}. Each task prints its own line with the id "
+        f"already filled in - use that.",
+        "5. Go back to step 1.",
         "",
         "Rules that make this work:",
         "",

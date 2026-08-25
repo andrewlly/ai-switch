@@ -64,6 +64,12 @@ ccfleet board list          # watch; poll this, not the panes
   parallel.
 - **`--dep` is how you sequence.** A task is not handed out until everything it
   depends on has settled, so you never have to time anything.
+- **Find the gates before you split anything.** Nobody is going to tell you:
+  read the repository's `AGENTS.md`, `CLAUDE.md`, `CONTRIBUTING`, `Makefile` or
+  `package.json` and put the **literal commands** into every task brief. A
+  member left to guess picks its own runner and reports a green that means
+  nothing — and a repo whose tests run file by file, or that needs a particular
+  interpreter, will have said so in writing.
 - **Write `--brief` for a reader who has none of your context** — it has not
   seen your conversation, only its own worktree.
 - **Then stop and watch.** Members claim, work and report; a checker accepts or

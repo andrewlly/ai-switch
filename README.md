@@ -444,10 +444,13 @@ deliberate.
 Everything else is a shortcut for something you would otherwise type. `-g`
 starts the fleet already decomposing instead of waiting for you — the same
 sentence, moved to the command line; the orchestrator records a later one with
-`board goal`. `--gates` names the literal commands every member must pass, for
-the one reason that a member left to guess picks its own runner and reports a
-green that means nothing; the orchestrator can just as well put them in each
-task's brief. `--no-board` goes back to bare members you brief by hand.
+`board goal`. `--gates` names the literal commands every member must pass — but you should
+not have to: they are written down in the repository, and the orchestrator is
+told to find them in `AGENTS.md` / `CLAUDE.md` / `CONTRIBUTING` / `package.json`
+before it decomposes anything, and to put the literal commands in every task
+brief. Pass `--gates` only to override what it would find. Discovery is
+instructed rather than detected on purpose: a regex over a contributing guide
+would be a second, worse reader of a file the fleet is already reading. `--no-board` goes back to bare members you brief by hand.
 
 ```bash
 ccfleet up -g "Add the three missing JSON contracts" \
@@ -637,7 +640,7 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 ```bash
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
-python3 ~/.local/share/cc-accounts/test_fleet.py    # 89 tests
+python3 ~/.local/share/cc-accounts/test_fleet.py    # 92 tests
 python3 ~/.local/share/cc-accounts/test_board.py    # 37 tests
 ```
 
