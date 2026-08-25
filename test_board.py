@@ -370,6 +370,15 @@ class TestSummary(Base):
         self.assertEqual(missing.summary()["tasks"], [])
         self.assertFalse(missing.summary()["drained"])   # open, not finished
 
+    def test_a_goal_can_arrive_after_the_board_does(self):
+        """The whole reason -g is optional: you start the fleet, then say what
+        it is for."""
+        board.Board(self.tmp / "boards" / "late.json").init("", False)
+        bd = board.Board(self.tmp / "boards" / "late.json")
+        self.assertEqual(bd.summary()["goal"], "")
+        bd.set_goal("Add the three missing contracts")
+        self.assertEqual(bd.summary()["goal"], "Add the three missing contracts")
+
     def test_the_summary_says_whether_members_can_ever_stop(self):
         self.assertFalse(self.bd.summary()["closed"])
         self.bd.close()

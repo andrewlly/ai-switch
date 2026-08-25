@@ -324,6 +324,18 @@ class Board:
             return dict(task)
         return self.update(apply)
 
+    def set_goal(self, goal: str) -> dict:
+        """Record what the fleet is for, once somebody has said.
+
+        A goal given at launch is on the board already; one typed to the
+        orchestrator afterwards is not, and a board whose `list` cannot say
+        what it is for is a board nobody else can pick up.
+        """
+        def apply(data):
+            data["goal"] = goal
+            return {"goal": goal}
+        return self.update(apply)
+
     def close(self) -> dict:
         """Declare decomposition finished: no more tasks are coming.
 

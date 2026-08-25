@@ -182,6 +182,7 @@ and `~/.codex` stay exactly where they are.
 | `ccfleet board add --title T [--brief B] [--files F] [--dep ID] [--role R]` | put a task on the board |
 | `ccfleet board next --as MEMBER [--wait S]` | claim the next task for a member; **blocks** |
 | `ccfleet board done ID` / `accept ID` / `reject ID --why W` / `block ID --why W` | report on one |
+| `ccfleet board goal TEXT` | record what the fleet is for, when the goal arrived later |
 | `ccfleet board close` / `reopen` | decomposition finished — the only thing that lets members stop |
 | `ccfleet board list [--json]` | every task and its state |
 | `ccfleet down [-s S] [--force] [--dry-run]` | kill the fleet; keep every worktree that still holds work |
@@ -417,13 +418,17 @@ forced teardown. `--dry-run` decides without doing.
 
 ### A goal, split once, worked until it is done
 
-The topology flags are the whole required surface. `up` writes a **shared task
-board** beside the worktrees and starts every member inside a claim loop
-against it:
+**Three flags, and nothing else is required.** `-w` a worker, `-c` a checker,
+`-o` who orchestrates. Any account in any role — a Codex account can be the
+orchestrator and a Claude account a worker, or the reverse:
 
 ```bash
-ccfleet up -w work:db -w codex:design -c personal:review
+ccfleet up -o personal -w codex:db -w work:design -c client:review
 ```
+
+`up` writes a **shared task board** beside the worktrees and starts every
+member inside a claim loop against it. Then you attach and say what you want,
+in your own words, to the orch window. That is the whole workflow.
 
 **Your prompt stays your prompt.** The rules a member works by are handed to
 `claude` as `--append-system-prompt-file`, so they govern every turn without
@@ -436,13 +441,13 @@ read its brief and then do the whole job itself. Codex has no equivalent flag,
 so its members get the same file as an opening message; that asymmetry is
 deliberate.
 
-`--goal` is optional and only records text on the board — you can just as well
-tell the orchestrator once it is up, which is the normal way to work. Pass it
-when you want the fleet to start decomposing without you. `--gates` is
-optional too: it names the literal commands every member must pass before
-reporting a task done, and exists only because a member left to guess picks its
-own and reports a green that means nothing. `--no-board` turns all of it off
-and goes back to bare members you brief by hand.
+Everything else is a shortcut for something you would otherwise type. `-g`
+starts the fleet already decomposing instead of waiting for you — the same
+sentence, moved to the command line; the orchestrator records a later one with
+`board goal`. `--gates` names the literal commands every member must pass, for
+the one reason that a member left to guess picks its own runner and reports a
+green that means nothing; the orchestrator can just as well put them in each
+task's brief. `--no-board` goes back to bare members you brief by hand.
 
 ```bash
 ccfleet up -g "Add the three missing JSON contracts" \
@@ -633,7 +638,7 @@ setter yet — edit `accounts.json`); `CCA_HOME` relocates the whole registry.
 python3 ~/.local/share/cc-accounts/test_cca.py      # 69 tests
 python3 ~/.local/share/cc-accounts/test_usage.py    # 47 tests
 python3 ~/.local/share/cc-accounts/test_fleet.py    # 89 tests
-python3 ~/.local/share/cc-accounts/test_board.py    # 36 tests
+python3 ~/.local/share/cc-accounts/test_board.py    # 37 tests
 ```
 
 Hermetic, both of them. `test_cca.py` runs against a temporary `CCA_HOME`

@@ -519,6 +519,9 @@ def kickoff_brief(session: str, repo: Path, base_label: str, fleet_dir: Path,
             "",
             "### Your job, in order",
             "",
+            f"0. **Record the goal on the board** once you have it: "
+            f"`{cmd} goal \"<the goal in one line>\"`. Anyone reading `list` "
+            f"then knows what the fleet is for; skip it and they cannot.",
             "1. **Understand the goal well enough to split it.** Read what you "
             "must. This is the one part that is yours alone.",
             "2. **Decompose it into tasks, one `add` per independent unit of "
@@ -1165,6 +1168,11 @@ def cmd_board(args) -> int:
               f"your loop - run the same command again.")
         return board.NO_TASK_YET
 
+    if verb == "goal":
+        bd.set_goal(args.text)
+        info(f"board goal recorded: {args.text}")
+        return 0
+
     if verb == "close":
         state = bd.close()
         info("board closed: no more tasks. Members will stop once the work on "
@@ -1333,6 +1341,8 @@ def build_parser() -> argparse.ArgumentParser:
     b = bsub.add_parser("block", help="a task cannot be finished")
     b.add_argument("id")
     b.add_argument("--why", required=True)
+    b = bsub.add_parser("goal", help="record what the fleet is for")
+    b.add_argument("text")
     b = bsub.add_parser("close", help="decomposition is finished; no more tasks")
     b = bsub.add_parser("reopen", help="undo close: more tasks are coming")
     b = bsub.add_parser("list", help="every task and its state")
